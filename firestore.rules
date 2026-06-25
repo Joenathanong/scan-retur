@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is authenticated and active
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActive() {
+      return isAuth() && getUserData().active == true;
+    }
+
+    function isAdmin() {
+      return isActive() && getUserData().role == 'admin';
+    }
+
+    // Users collection
+    match /users/{uid} {
+      allow read: if isActive();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || request.auth.uid == uid;
+      allow delete: if false; // Never delete users
+    }
+
+    // Expedisi
+    match /expedisi/{expId} {
+      allow read: if isActive();
+      allow write: if isActive(); // Any user can add expedisi (auto-create on scan)
+    }
+
+    // Karung
+    match /karung/{karungId} {
+      allow read: if isActive();
+      allow create: if isActive();
+      allow update: if isActive();
+      allow delete: if false;
+    }
+
+    // Scans
+    match /scans/{scanId} {
+      allow read: if isActive();
+      allow create: if isActive();
+      allow update: if isActive(); // For syncedToSheet flag
+      allow delete: if false;
+    }
+
+    // Settings
+    match /settings/{docId} {
+      allow read: if isActive();
+      allow write: if isAdmin();
+    }
+
+    // Audit Log
+    match /auditLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if isActive();
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,178 @@
+import { NextRequest, NextResponse } from "next/server";
+import { google } from "googleapis";
+import { sheetTabName, sheetDateName, formatTime } from "@/lib/utils";
+
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+
+const HEADER_ROW = [
+  "No.",
+  "Kode Resi",
+  "No. Karung",
+  "Di Scan Oleh",
+  "Tanggal",
+  "Jam",
+];
+
+function getAuth() {
+  return new google.auth.JWT({
+    email: process.env.GOOGLE_SHEETS_CLIENT_EMAIL,
+    key: (process.env.GOOGLE_SHEETS_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+    scopes: SCOPES,
+  });
+}
+
+async function ensureSheet(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheetName: string
+) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const existing = meta.data.sheets?.find(
+    (s) => s.properties?.title === sheetName
+  );
+
+  if (!existing) {
+    // Add new sheet
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addSheet: {
+              properties: {
+                title: sheetName,
+                gridProperties: { frozenRowCount: 1 },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    // Write header
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `'${sheetName}'!A1:F1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [HEADER_ROW] },
+    });
+
+    // Format header (bold, background)
+    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+    const sheetId = sheetMeta.data.sheets?.find(
+      (s) => s.properties?.title === sheetName
+    )?.properties?.sheetId;
+
+    if (sheetId !== undefined) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: 1,
+                },
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: { red: 0.09, green: 0.64, blue: 0.3 },
+                    textFormat: {
+                      bold: true,
+                      foregroundColor: { red: 1, green: 1, blue: 1 },
+                    },
+                    horizontalAlignment: "CENTER",
+                  },
+                },
+                fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+              },
+            },
+            {
+              updateSheetProperties: {
+                properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+                fields: "gridProperties.frozenRowCount",
+              },
+            },
+          ],
+        },
+      });
+    }
+  }
+}
+
+async function getNextRowNumber(
+  sheets: ReturnType<typeof google.sheets>,
+  spreadsheetId: string,
+  sheetName: string
+): Promise<number> {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sheetName}'!A:A`,
+    });
+    const rows = res.data.values || [];
+    // Row 1 is header, so data starts at row 2.
+    // The "No." in column A for data rows is numeric.
+    const dataRows = rows.filter((r) => r[0] && !isNaN(Number(r[0])));
+    return dataRows.length + 1;
+  } catch {
+    return 1;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const {
+      noResi,
+      nomorKarung,
+      expedisiName,
+      expedisiCode,
+      scannedByName,
+      scannedAt,
+      date,
+      spreadsheetId: bodySpreadsheetId,
+    } = body;
+
+    const spreadsheetId =
+      bodySpreadsheetId || process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+
+    if (!spreadsheetId) {
+      return NextResponse.json(
+        { error: "Spreadsheet ID not configured" },
+        { status: 400 }
+      );
+    }
+
+    const auth = getAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+
+    const sheetName = sheetTabName(expedisiCode, date);
+    await ensureSheet(sheets, spreadsheetId, sheetName);
+
+    const rowNo = await getNextRowNumber(sheets, spreadsheetId, sheetName);
+    const scanDate = sheetDateName(date);
+    const scanTime = formatTime(new Date(scannedAt));
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range: `'${sheetName}'!A:F`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody: {
+        values: [
+          [rowNo, noResi, nomorKarung, scannedByName, scanDate, scanTime],
+        ],
+      },
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("GSheet sync error:", err);
+    return NextResponse.json(
+      { error: "Sync failed", detail: String(err) },
+      { status: 500 }
+    );
+  }
+}
