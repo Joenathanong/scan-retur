@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -10,7 +10,6 @@ import {
   getSettings,
   isKarungLocked,
   getKarungHistory,
-  getTodayKarungByExpedisi,
 } from "@/lib/firestore";
 import { todayString, formatDate, cn } from "@/lib/utils";
 import type { Karung, ScanRecord, CompanySettings } from "@/types";
@@ -20,15 +19,24 @@ import {
   Loader2,
   Lock,
   Package,
-  Truck,
-  Calendar,
-  Search,
   FileText,
 } from "lucide-react";
 
 const ROWS_PER_PAGE = 30;
 
 export default function PrintPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex justify-center items-center min-h-[300px]">
+        <Loader2 className="w-8 h-8 animate-spin text-green-600" />
+      </div>
+    }>
+      <PrintPageInner />
+    </Suspense>
+  );
+}
+
+function PrintPageInner() {
   const { appUser } = useAuth();
   const params = useSearchParams();
   const router = useRouter();
@@ -336,7 +344,7 @@ export default function PrintPage() {
       </div>
 
       {/* Print-specific styles */}
-      <style jsx global>{`
+      <style>{`
         @media print {
           .no-print { display: none !important; }
           body { background: white !important; margin: 0; }

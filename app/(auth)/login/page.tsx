@@ -1,19 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { Eye, EyeOff, ScanLine, Loader2 } from "lucide-react";
 
-export default function LoginPage() {
+// Isolated component that uses useSearchParams — must be inside <Suspense>
+function LoginForm() {
   const { signIn, appUser, loading } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
 
-  const [email, setEmail] = useState("");
+  const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [error, setError] = useState("");
+  const [showPw, setShowPw]     = useState(false);
+  const [error, setError]       = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -31,7 +32,11 @@ export default function LoginPage() {
       router.replace(params.get("redirect") || "/dashboard");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("invalid-credential") || msg.includes("wrong-password") || msg.includes("user-not-found")) {
+      if (
+        msg.includes("invalid-credential") ||
+        msg.includes("wrong-password") ||
+        msg.includes("user-not-found")
+      ) {
         setError("Email atau password salah.");
       } else {
         setError(msg || "Login gagal. Coba lagi.");
@@ -131,5 +136,23 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+// Spinner shown while Suspense resolves
+function LoginFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-slate-100">
+      <div className="w-8 h-8 border-4 border-green-600 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+// Page export wraps form in Suspense — required by Next.js when using useSearchParams
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginForm />
+    </Suspense>
   );
 }
