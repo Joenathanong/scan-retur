@@ -416,8 +416,7 @@ export function subscribeKarungScans(
           const ta = (a.scannedAt as Timestamp)?.seconds ?? 0;
           const tb = (b.scannedAt as Timestamp)?.seconds ?? 0;
           return tb - ta; // desc (terbaru dulu)
-        })
-        .slice(0, 50);
+        });
       callback(scans);
     }
   );

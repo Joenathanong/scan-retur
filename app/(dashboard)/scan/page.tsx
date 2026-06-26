@@ -208,13 +208,22 @@ export default function ScanPage() {
     ]
   );
 
-  // PDT / barcode gun sends Enter after scan
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && scanInput.trim()) {
-      e.preventDefault();
-      handleScan(scanInput);
-    }
-  };
+  // PDT / barcode gun — delay 50ms sebelum baca value
+  // agar semua karakter dari scanner selesai masuk ke DOM input
+  // sebelum diproses (hindari partial scan).
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" && !processing) {
+        e.preventDefault();
+        setTimeout(() => {
+          // Baca dari DOM (bukan React state) — paling akurat untuk HID scanner
+          const value = (inputRef.current?.value ?? "").trim();
+          if (value) handleScan(value);
+        }, 50);
+      }
+    },
+    [processing, handleScan]
+  );
 
   // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
   const handleAddExpedisi = async () => {
