@@ -69,6 +69,7 @@ export default function ScanPage() {
   const [recentScans, setRecentScans] = useState<ScanRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [processing, setProcessing] = useState(false);
+  const [duplicateInfo, setDuplicateInfo] = useState("");
   const [settings, setSettings] = useState<CompanySettings | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -127,6 +128,7 @@ export default function ScanPage() {
     feedbackTimer.current = setTimeout(() => {
       setFeedback("idle");
       setScanInput("");
+      setDuplicateInfo("");
       inputRef.current?.focus();
     }, 1500);
   }, []);
@@ -148,11 +150,12 @@ export default function ScanPage() {
 
       setProcessing(true);
 
-      const isDuplicate = await checkDuplicateResi(selectedKarung.id, resi);
+      const { isDuplicate, karungInfo } = await checkDuplicateResi(selectedKarung.id, resi);
 
       if (isDuplicate) {
         setFeedback("duplicate");
         setLastResi(resi);
+        setDuplicateInfo(karungInfo ?? "");
         await playFailed();
         resetFeedback();
         setProcessing(false);
@@ -574,7 +577,11 @@ export default function ScanPage() {
                     "text-sm",
                     feedback === "success" ? "text-green-600" : "text-red-600"
                   )}>
-                    {feedback === "success" ? "Berhasil disimpan" : feedback === "duplicate" ? "Resi sudah pernah di-scan!" : "Gagal"}
+                    {feedback === "success"
+                      ? "Berhasil disimpan"
+                      : feedback === "duplicate"
+                      ? <>Sudah di-scan sebelumnya{duplicateInfo && <span className="block text-xs mt-0.5 opacity-80">📦 {duplicateInfo}</span>}</>
+                      : "Gagal"}
                   </p>
                 </div>
               </div>

@@ -331,19 +331,28 @@ export async function getKarungHistory(
 
 // ─── SCAN RECORDS ──────────────────────────────────────────────────────────
 
+/**
+ * Cek duplikat resi secara GLOBAL (semua karung, semua expedisi).
+ * Jika resi sudah pernah di-scan sukses di mana pun, return info karungnya.
+ */
 export async function checkDuplicateResi(
-  karungId: string,
+  _karungId: string,
   noResi: string
-): Promise<boolean> {
+): Promise<{ isDuplicate: boolean; karungInfo?: string }> {
   const snap = await getDocs(
     query(
       collection(db, "scans"),
-      where("karungId", "==", karungId),
       where("noResi", "==", noResi),
+      where("status", "==", "success"),
       limit(1)
     )
   );
-  return !snap.empty;
+  if (snap.empty) return { isDuplicate: false };
+  const data = snap.docs[0].data();
+  return {
+    isDuplicate: true,
+    karungInfo: `Karung #${data.nomorKarung} — ${data.expedisiName} (${data.date ?? ""})`,
+  };
 }
 
 export async function addScanRecord(

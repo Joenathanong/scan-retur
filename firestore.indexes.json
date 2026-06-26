@@ -4,6 +4,14 @@
       "collectionGroup": "scans",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "noResi",  "order": "ASCENDING" },
+        { "fieldPath": "status",  "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "scans",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "date",      "order": "ASCENDING" },
         { "fieldPath": "status",    "order": "ASCENDING" },
         { "fieldPath": "scannedAt", "order": "ASCENDING" }
