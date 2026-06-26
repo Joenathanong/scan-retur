@@ -39,6 +39,33 @@ import {
 type Step = "select-expedisi" | "select-karung" | "scanning";
 type ScanFeedback = "idle" | "success" | "failed" | "duplicate";
 
+/** Resi kurang dari ini dianggap partial scan (barcode tidak terbaca sempurna). */
+const MIN_RESI_LENGTH = 6;
+
+/**
+ * Bersihkan hasil scan dari kontaminasi scanner HID:
+ *
+ * Kasus utama — repeated-prefix suffix:
+ *   "JX9730214994JX" → prefix "JX" muncul lagi di pos 12 → trim → "JX9730214994"
+ *   Terjadi karena scanner sudah mulai mengetik barcode berikutnya sebelum
+ *   Enter dari barcode sebelumnya selesai diproses.
+ */
+function cleanResi(raw: string): string {
+  const s = raw.toUpperCase().trim();
+  if (s.length < 4) return s;
+
+  // Deteksi prefix 2-huruf yang muncul lagi setelah minimal 6 karakter
+  if (/^[A-Z]{2}/.test(s)) {
+    const prefix = s.slice(0, 2);
+    const repeatIdx = s.indexOf(prefix, 6);
+    if (repeatIdx > 0) {
+      return s.slice(0, repeatIdx);
+    }
+  }
+
+  return s;
+}
+
 export default function ScanPage() {
   const { appUser } = useAuth();
   const router = useRouter();
@@ -139,6 +166,15 @@ export default function ScanPage() {
       const resi = value.trim().toUpperCase();
       if (!resi || processing || !selectedKarung || !appUser) return;
 
+      // Tolak partial scan — barcode tidak terbaca sempurna
+      if (resi.length < MIN_RESI_LENGTH) {
+        setFeedback("failed");
+        setLastResi(`SCAN TIDAK LENGKAP (${resi.length} karakter)`);
+        await playFailed();
+        resetFeedback();
+        return;
+      }
+
       // Check if karung is locked
       if (isKarungLocked(selectedKarung)) {
         setFeedback("failed");
@@ -211,18 +247,29 @@ export default function ScanPage() {
     ]
   );
 
-  // PDT / barcode gun — delay 50ms sebelum baca value
-  // agar semua karakter dari scanner selesai masuk ke DOM input
-  // sebelum diproses (hindari partial scan).
+  // PDT / barcode gun — tangkap nilai SAAT Enter ditekan (T=0),
+  // bukan setelah 50ms. Setelah 50ms, scanner sudah bisa mulai mengetik
+  // barcode BERIKUTNYA sehingga terjadi kontaminasi (misal "JX9730214994JX").
+  // Input langsung di-clear agar karakter barcode berikutnya tidak tersisa.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter" && !processing) {
         e.preventDefault();
+
+        // Tangkap nilai dari DOM sekarang — paling akurat untuk HID scanner
+        const captured = (inputRef.current?.value ?? "").trim();
+
+        // Segera bersihkan input supaya scan berikutnya mulai dari kosong
+        if (inputRef.current) inputRef.current.value = "";
+        setScanInput("");
+
+        // Delay pendek (30ms) untuk karakter akhir barcode ini yang masih
+        // dalam perjalanan, tapi jauh lebih singkat dari sebelumnya agar
+        // tidak menangkap karakter dari barcode berikutnya.
         setTimeout(() => {
-          // Baca dari DOM (bukan React state) — paling akurat untuk HID scanner
-          const value = (inputRef.current?.value ?? "").trim();
-          if (value) handleScan(value);
-        }, 50);
+          const cleaned = cleanResi(captured);
+          if (cleaned) handleScan(cleaned);
+        }, 30);
       }
     },
     [processing, handleScan]
