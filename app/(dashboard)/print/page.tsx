@@ -27,8 +27,51 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-// F4 (215×330mm), compact rows — 33 per page fills each page, last page has remainder
-const ROWS_PER_PAGE = 33;
+// Pagination constants — empirically calibrated for F4 (215×330mm) @page margin 1.8cm 2cm
+// Page 0: tall company header takes ~extra 2–3 rows of height
+// Last page: footer (note + signatures) takes ~8–10 rows of height
+const ROWS_FIRST_ONLY = 20; // single page doc: big header + rows + footer all on one page
+const ROWS_FIRST      = 28; // first page of multi-page: big header, no footer
+const ROWS_MIDDLE     = 33; // continuation pages: compact header, no footer
+const ROWS_LAST_MAX   = 20; // last page of multi-page: compact header + footer
+
+/** Build variable-height page slices so every physical page is maximally filled. */
+function buildPages(rows: string[][]): string[][][] {
+  if (rows.length === 0) return [[]];
+  // Small doc: fits on a single page (big header + all rows + footer)
+  if (rows.length <= ROWS_FIRST_ONLY) return [rows];
+
+  const pages: string[][][] = [];
+  let pos = 0;
+  const total = rows.length;
+
+  while (pos < total) {
+    const isFirst = pages.length === 0;
+    const capacity = isFirst ? ROWS_FIRST : ROWS_MIDDLE;
+    const remaining = total - pos;
+
+    if (remaining <= capacity) {
+      // This will be the final page (footer printed here)
+      if (remaining > ROWS_LAST_MAX) {
+        // Too many for last page — offload excess to current (non-footer) page
+        const takeNow = remaining - ROWS_LAST_MAX;
+        const safeTake = Math.min(takeNow, capacity);
+        if (safeTake > 0 && safeTake < remaining) {
+          pages.push(rows.slice(pos, pos + safeTake));
+          pos += safeTake;
+          continue; // next iteration adds the remaining ≤ ROWS_LAST_MAX as last page
+        }
+      }
+      pages.push(rows.slice(pos));
+      break;
+    } else {
+      pages.push(rows.slice(pos, pos + capacity));
+      pos += capacity;
+    }
+  }
+
+  return pages;
+}
 
 export default function PrintPage() {
   return (
@@ -242,10 +285,8 @@ function PrintPageInner() {
     "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG";
   const anyLocked        = karungList.some((k) => isKarungLocked(k));
 
-  const totalPages  = Math.max(1, Math.ceil(sheetRows.length / ROWS_PER_PAGE));
-  const pages       = Array.from({ length: totalPages }, (_, i) =>
-    sheetRows.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE)
-  );
+  const pages      = buildPages(sheetRows);
+  const totalPages = Math.max(1, pages.length);
 
   // ════════════════════════════════════════════════════════════════════════════
   // SELECTOR VIEW
@@ -569,11 +610,10 @@ function PrintPageInner() {
                   </thead>
                   <tbody>
                     {pageRows.map((row, i) => {
-                      const globalNo = pageIndex * ROWS_PER_PAGE + i + 1;
                       const isEven = i % 2 === 0;
                       return (
                         <tr key={i} style={{ backgroundColor: isEven ? "#ffffff" : "#f8fafc" }}>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{globalNo}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{row[0]}</td>
                           <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "11px" }}>{row[1]}</td>
                           <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
                           <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
