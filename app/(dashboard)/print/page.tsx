@@ -470,11 +470,12 @@ function PrintPageInner() {
           {pages.map((pageRows, pageIndex) => (
             <div
               key={pageIndex}
-              className={`bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none ${
+              className={`bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none print:overflow-visible ${
                 pageIndex > 0 ? "print:break-before-page" : ""
               }`}
+            style={pageIndex < totalPages - 1 ? { pageBreakAfter: "always", breakAfter: "page" } : {}}
             >
-              <div style={{ padding: "32px 36px", fontFamily: "Arial, sans-serif" }}>
+              <div style={{ padding: "28px 32px", fontFamily: "Arial, sans-serif" }}>
 
                 {/* ── Document Header ── */}
                 {pageIndex === 0 ? (
@@ -554,11 +555,12 @@ function PrintPageInner() {
                           border: "1px solid #1e293b",
                           textAlign: i === 0 || i >= 4 ? "center" : "left",
                           whiteSpace: "nowrap",
-                          ...(i === 0 ? { width: "36px" } : {}),
-                          ...(i === 2 ? { width: "80px" } : {}),
-                          ...(i === 3 ? { width: "120px" } : {}),
-                          ...(i === 4 ? { width: "90px" } : {}),
-                          ...(i === 5 ? { width: "62px" } : {}),
+                          ...(i === 0 ? { width: "34px" } : {}),
+                          ...(i === 1 ? { width: "130px" } : {}),  // kode resi — lebih sempit
+                          ...(i === 2 ? { width: "72px" } : {}),
+                          ...(i === 3 ? { width: "160px" } : {}),  // di scan oleh — lebih lebar
+                          ...(i === 4 ? { width: "80px" } : {}),
+                          ...(i === 5 ? { width: "58px" } : {}),
                         }}>
                           {h}
                         </th>
@@ -660,43 +662,37 @@ function PrintPageInner() {
 
       <style>{`
         @media print {
-          /* Paksa cetak warna — tanpa ini background gelap tidak muncul */
+          /* Paksa warna background tercetak */
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
 
-          /* Sembunyikan semua elemen layout (sidebar, header, dll) */
-          body * { visibility: hidden; }
+          /* Sembunyikan elemen layout (sidebar, header, action bar) */
+          .no-print { display: none !important; }
 
-          /* Tampilkan hanya konten cetak */
-          .print-container,
-          .print-container * { visibility: visible; }
+          /* Hapus padding/margin layout wrapper */
+          body { background: white !important; margin: 0 !important; padding: 0 !important; }
+          main { padding: 0 !important; margin: 0 !important; }
 
-          /* Posisikan di pojok kiri atas, full width */
+          /* Print container full width, tanpa ornamen screen */
           .print-container {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
             max-width: 100% !important;
             margin: 0 !important;
             padding: 0 !important;
-            background: white !important;
           }
-
-          /* Bersihkan styling wrapper card per halaman */
           .print-container > div {
             box-shadow: none !important;
             border: none !important;
             border-radius: 0 !important;
             margin: 0 !important;
+            padding: 0 !important;
           }
 
-          /* Ukuran kertas F4, margin cetak */
+          /* F4 215×330mm, margin cukup agar tidak mentok tepi */
           @page {
             size: 215mm 330mm portrait;
-            margin: 1.2cm 1.5cm;
+            margin: 1.8cm 2cm;
           }
         }
       `}</style>

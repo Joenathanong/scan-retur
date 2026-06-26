@@ -17,12 +17,12 @@ export default function DashboardLayout({
   return (
     <AuthGuard>
       <div className="min-h-screen bg-slate-50">
-        <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <div className="no-print"><Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} /></div>
 
         {/* Main content area — offset for sidebar on desktop */}
-        <div className="lg:pl-64 min-h-screen flex flex-col">
+        <div className="lg:pl-64 min-h-screen flex flex-col print:pl-0">
           {/* Top bar */}
-          <header className="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 lg:px-6 py-3 flex items-center gap-3">
+          <header className="no-print sticky top-0 z-20 bg-white border-b border-slate-200 px-4 lg:px-6 py-3 flex items-center gap-3">
             <button
               className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition"
               onClick={() => setSidebarOpen(true)}
