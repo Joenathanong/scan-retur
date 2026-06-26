@@ -3,9 +3,9 @@ import {
   doc,
   getDoc,
   getDocs,
+  setDoc,
   addDoc,
   updateDoc,
-  deleteDoc,
   query,
   where,
   orderBy,
@@ -13,7 +13,6 @@ import {
   Timestamp,
   serverTimestamp,
   onSnapshot,
-  writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type {
@@ -29,8 +28,10 @@ import type {
 // ─── SETTINGS ──────────────────────────────────────────────────────────────
 
 export async function getSettings(): Promise<CompanySettings> {
-  const snap = await getDoc(doc(db, "settings", "company"));
-  if (snap.exists()) return snap.data() as CompanySettings;
+  try {
+    const snap = await getDoc(doc(db, "settings", "company"));
+    if (snap.exists()) return snap.data() as CompanySettings;
+  } catch { /* ignore */ }
   return {
     namaPerusahaan: "PT. IEG",
     noteTandaTerima:
@@ -41,51 +42,25 @@ export async function getSettings(): Promise<CompanySettings> {
   };
 }
 
-export async function saveSettings(
-  data: Partial<CompanySettings>,
-  uid: string
-) {
-  await updateDoc(doc(db, "settings", "company"), {
-    ...data,
-    updatedAt: serverTimestamp(),
-    updatedBy: uid,
-  });
-}
-
-export async function initSettings() {
-  const ref = doc(db, "settings", "company");
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await updateDoc(ref, {
-      namaPerusahaan: "PT. IEG",
-      noteTandaTerima:
-        "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG",
-      spreadsheetId: "",
-      updatedAt: null,
-      updatedBy: null,
-    }).catch(() => {
-      // If doc doesn't exist, create via set
-      import("firebase/firestore").then(({ setDoc }) =>
-        setDoc(ref, {
-          namaPerusahaan: "PT. IEG",
-          noteTandaTerima:
-            "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG",
-          spreadsheetId: "",
-          updatedAt: null,
-          updatedBy: null,
-        })
-      );
-    });
-  }
+export async function saveSettings(data: Partial<CompanySettings>, uid: string) {
+  await setDoc(
+    doc(db, "settings", "company"),
+    { ...data, updatedAt: serverTimestamp(), updatedBy: uid },
+    { merge: true }
+  );
 }
 
 // ─── USERS ─────────────────────────────────────────────────────────────────
 
 export async function getUsers(): Promise<AppUser[]> {
-  const snap = await getDocs(
-    query(collection(db, "users"), orderBy("createdAt", "desc"))
-  );
-  return snap.docs.map((d) => ({ uid: d.id, ...d.data() } as AppUser));
+  const snap = await getDocs(collection(db, "users"));
+  return snap.docs
+    .map((d) => ({ uid: d.id, ...d.data() } as AppUser))
+    .sort((a, b) => {
+      const ta = (a.createdAt as Timestamp)?.seconds ?? 0;
+      const tb = (b.createdAt as Timestamp)?.seconds ?? 0;
+      return tb - ta;
+    });
 }
 
 export async function getUser(uid: string): Promise<AppUser | null> {
@@ -98,12 +73,10 @@ export async function createUserDoc(
   uid: string,
   data: Omit<AppUser, "uid" | "createdAt">
 ) {
-  await import("firebase/firestore").then(({ setDoc }) =>
-    setDoc(doc(db, "users", uid), {
-      ...data,
-      createdAt: serverTimestamp(),
-    })
-  );
+  await setDoc(doc(db, "users", uid), {
+    ...data,
+    createdAt: serverTimestamp(),
+  });
 }
 
 export async function updateUser(uid: string, data: Partial<AppUser>) {
@@ -116,22 +89,35 @@ export async function toggleUserActive(uid: string, active: boolean) {
 
 // ─── EXPEDISI ──────────────────────────────────────────────────────────────
 
+/** Ambil semua expedisi aktif. Sort client-side — tidak butuh composite index. */
 export async function getExpedisiList(): Promise<Expedisi[]> {
   const snap = await getDocs(
-    query(
-      collection(db, "expedisi"),
-      where("active", "==", true),
-      orderBy("name", "asc")
-    )
+    query(collection(db, "expedisi"), where("active", "==", true))
   );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Expedisi));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Expedisi))
+    .sort((a, b) => a.name.localeCompare(b.name, "id"));
 }
 
 export async function getAllExpedisi(): Promise<Expedisi[]> {
-  const snap = await getDocs(
-    query(collection(db, "expedisi"), orderBy("name", "asc"))
+  const snap = await getDocs(collection(db, "expedisi"));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Expedisi))
+    .sort((a, b) => a.name.localeCompare(b.name, "id"));
+}
+
+/**
+ * Cari expedisi berdasarkan nama (case-insensitive).
+ * Returns null jika tidak ada.
+ */
+export async function findExpedisiByName(name: string): Promise<Expedisi | null> {
+  const snap = await getDocs(collection(db, "expedisi"));
+  const normalized = name.trim().toLowerCase();
+  const found = snap.docs.find(
+    (d) => (d.data().name as string).toLowerCase() === normalized
   );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Expedisi));
+  if (!found) return null;
+  return { id: found.id, ...found.data() } as Expedisi;
 }
 
 export async function createExpedisi(
@@ -155,12 +141,12 @@ export async function updateExpedisi(id: string, data: Partial<Expedisi>) {
   await updateDoc(doc(db, "expedisi", id), data);
 }
 
-export async function deleteExpedisi(id: string) {
-  await updateDoc(doc(db, "expedisi", id), { active: false });
-}
-
 // ─── KARUNG ────────────────────────────────────────────────────────────────
 
+/**
+ * Karung hari ini untuk expedisi tertentu.
+ * Hanya filter expedisiId + date — tidak butuh composite index.
+ */
 export async function getTodayKarungByExpedisi(
   expedisiId: string,
   date: string
@@ -169,11 +155,16 @@ export async function getTodayKarungByExpedisi(
     query(
       collection(db, "karung"),
       where("expedisiId", "==", expedisiId),
-      where("date", "==", date),
-      orderBy("createdAt", "desc")
+      where("date", "==", date)
     )
   );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Karung));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Karung))
+    .sort((a, b) => {
+      const ta = (a.createdAt as Timestamp)?.seconds ?? 0;
+      const tb = (b.createdAt as Timestamp)?.seconds ?? 0;
+      return tb - ta; // desc
+    });
 }
 
 export async function createKarung(
@@ -235,22 +226,16 @@ export function isKarungLocked(karung: Karung): boolean {
   if (karung.status === "open") return false;
   if (karung.status === "locked") return true;
   if (karung.status === "admin_unlocked") {
-    // Auto-relock after 24 hours
     if (karung.adminUnlockedAt) {
-      const unlockTime = karung.adminUnlockedAt.toMillis();
-      const now = Date.now();
-      if (now - unlockTime > 24 * 60 * 60 * 1000) return true;
+      const unlockTime = (karung.adminUnlockedAt as Timestamp).toMillis();
+      if (Date.now() - unlockTime > 24 * 60 * 60 * 1000) return true;
     }
     return false;
   }
   return false;
 }
 
-export async function lockKarung(
-  id: string,
-  uid: string,
-  userName: string
-) {
+export async function lockKarung(id: string, uid: string, userName: string) {
   await updateDoc(doc(db, "karung", id), {
     status: "locked",
     lockedAt: serverTimestamp(),
@@ -260,40 +245,51 @@ export async function lockKarung(
   await addAuditLog(uid, userName, "LOCK_KARUNG", `Lock karung ID: ${id}`);
 }
 
-export async function unlockKarung(
-  id: string,
-  uid: string,
-  userName: string
-) {
+export async function unlockKarung(id: string, uid: string, userName: string) {
   await updateDoc(doc(db, "karung", id), {
     status: "admin_unlocked",
     adminUnlockedAt: serverTimestamp(),
     adminUnlockedBy: uid,
   });
-  await addAuditLog(
-    uid,
-    userName,
-    "ADMIN_UNLOCK_KARUNG",
-    `Admin unlock karung ID: ${id}`
-  );
+  await addAuditLog(uid, userName, "ADMIN_UNLOCK_KARUNG", `Admin unlock karung ID: ${id}`);
 }
 
-export async function relockKarung(
-  id: string,
-  uid: string,
-  userName: string
-) {
+export async function relockKarung(id: string, uid: string, userName: string) {
   await updateDoc(doc(db, "karung", id), {
     status: "locked",
     adminUnlockedAt: null,
     adminUnlockedBy: null,
   });
-  await addAuditLog(
-    uid,
-    userName,
-    "ADMIN_RELOCK_KARUNG",
-    `Admin re-lock karung ID: ${id}`
+  await addAuditLog(uid, userName, "ADMIN_RELOCK_KARUNG", `Admin re-lock karung ID: ${id}`);
+}
+
+/**
+ * History karung berdasarkan range tanggal.
+ * Filter date range dengan satu orderBy (wajib untuk range query).
+ * Sort lanjutan dilakukan client-side.
+ */
+export async function getKarungHistory(
+  dateFrom: string,
+  dateTo: string
+): Promise<Karung[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, "karung"),
+      where("date", ">=", dateFrom),
+      where("date", "<=", dateTo),
+      orderBy("date", "asc")
+    )
   );
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as Karung))
+    .sort((a, b) => {
+      // date desc
+      if (b.date !== a.date) return b.date.localeCompare(a.date);
+      // createdAt desc
+      const ta = (a.createdAt as Timestamp)?.seconds ?? 0;
+      const tb = (b.createdAt as Timestamp)?.seconds ?? 0;
+      return tb - ta;
+    });
 }
 
 // ─── SCAN RECORDS ──────────────────────────────────────────────────────────
@@ -317,7 +313,6 @@ export async function addScanRecord(
   data: Omit<ScanRecord, "id">
 ): Promise<ScanRecord> {
   const ref = await addDoc(collection(db, "scans"), data);
-  // Increment counter on karung
   if (data.status === "success") {
     const karungRef = doc(db, "karung", data.karungId);
     const karungSnap = await getDoc(karungRef);
@@ -329,64 +324,66 @@ export async function addScanRecord(
   return { id: ref.id, ...data };
 }
 
+/**
+ * Ambil semua resi sukses untuk satu karung.
+ * Filter hanya karungId — tidak butuh composite index.
+ * Filter status + sort client-side.
+ */
 export async function getScansByKarung(karungId: string): Promise<ScanRecord[]> {
   const snap = await getDocs(
-    query(
-      collection(db, "scans"),
-      where("karungId", "==", karungId),
-      where("status", "==", "success"),
-      orderBy("scannedAt", "asc")
-    )
+    query(collection(db, "scans"), where("karungId", "==", karungId))
   );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ScanRecord));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as ScanRecord))
+    .filter((s) => s.status === "success")
+    .sort((a, b) => {
+      const ta = (a.scannedAt as Timestamp)?.seconds ?? 0;
+      const tb = (b.scannedAt as Timestamp)?.seconds ?? 0;
+      return ta - tb; // asc
+    });
 }
 
+/**
+ * Resi berdasarkan tanggal.
+ * Filter date saja — sort + filter status client-side.
+ */
 export async function getScansByDate(date: string): Promise<ScanRecord[]> {
   const snap = await getDocs(
-    query(
-      collection(db, "scans"),
-      where("date", "==", date),
-      where("status", "==", "success"),
-      orderBy("scannedAt", "asc")
-    )
+    query(collection(db, "scans"), where("date", "==", date))
   );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ScanRecord));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() } as ScanRecord))
+    .filter((s) => s.status === "success")
+    .sort((a, b) => {
+      const ta = (a.scannedAt as Timestamp)?.seconds ?? 0;
+      const tb = (b.scannedAt as Timestamp)?.seconds ?? 0;
+      return ta - tb; // asc
+    });
 }
 
+/**
+ * Real-time listener untuk scan satu karung.
+ * Filter hanya karungId — filter status + sort + limit client-side.
+ */
 export function subscribeKarungScans(
   karungId: string,
   callback: (scans: ScanRecord[]) => void
 ) {
   return onSnapshot(
-    query(
-      collection(db, "scans"),
-      where("karungId", "==", karungId),
-      where("status", "==", "success"),
-      orderBy("scannedAt", "desc"),
-      limit(50)
-    ),
+    query(collection(db, "scans"), where("karungId", "==", karungId)),
     (snap) => {
-      callback(
-        snap.docs.map((d) => ({ id: d.id, ...d.data() } as ScanRecord))
-      );
+      const scans = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as ScanRecord))
+        .filter((s) => s.status === "success")
+        .sort((a, b) => {
+          const ta = (a.scannedAt as Timestamp)?.seconds ?? 0;
+          const tb = (b.scannedAt as Timestamp)?.seconds ?? 0;
+          return tb - ta; // desc (terbaru dulu)
+        })
+        .slice(0, 50);
+      callback(scans);
     }
   );
-}
-
-export async function getKarungHistory(
-  dateFrom: string,
-  dateTo: string
-): Promise<Karung[]> {
-  const snap = await getDocs(
-    query(
-      collection(db, "karung"),
-      where("date", ">=", dateFrom),
-      where("date", "<=", dateTo),
-      orderBy("date", "desc"),
-      orderBy("createdAt", "desc")
-    )
-  );
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Karung));
 }
 
 export async function markScanSynced(scanId: string) {
@@ -402,14 +399,16 @@ export async function addAuditLog(
   detail: string,
   metadata?: Record<string, string>
 ) {
-  await addDoc(collection(db, "auditLog"), {
-    userId,
-    userName,
-    action,
-    detail,
-    metadata: metadata || {},
-    timestamp: serverTimestamp(),
-  });
+  try {
+    await addDoc(collection(db, "auditLog"), {
+      userId,
+      userName,
+      action,
+      detail,
+      metadata: metadata || {},
+      timestamp: serverTimestamp(),
+    });
+  } catch { /* audit log gagal tidak boleh crash operasi utama */ }
 }
 
 export async function getAuditLogs(limitCount = 100): Promise<AuditLog[]> {

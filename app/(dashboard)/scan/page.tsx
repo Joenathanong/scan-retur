@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   getExpedisiList,
   createExpedisi,
+  findExpedisiByName,
   getTodayKarungByExpedisi,
   createKarung,
   checkDuplicateResi,
@@ -17,7 +18,8 @@ import {
 import { syncToSheet } from "@/lib/gsheet";
 import { playSuccess, playFailed } from "@/lib/audio";
 import { todayString, formatDateTime, cn } from "@/lib/utils";
-import { Timestamp } from "firebase/firestore";
+import { Timestamp, doc, updateDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import type { Expedisi, Karung, ScanRecord, CompanySettings } from "@/types";
 import {
   ScanLine,
@@ -50,6 +52,8 @@ export default function ScanPage() {
   const [newExpedisiName, setNewExpedisiName] = useState("");
   const [addingExpedisi, setAddingExpedisi] = useState(false);
   const [expedisiLoading, setExpedisiLoading] = useState(true);
+  const [expedisiError, setExpedisiError] = useState("");
+  const [expedisiExistMsg, setExpedisiExistMsg] = useState("");
 
   // ── Karung ───────────────────────────────────────────────────────────────
   const [karungList, setKarungList] = useState<Karung[]>([]);
@@ -74,21 +78,31 @@ export default function ScanPage() {
 
   // ── Load expedisi list ───────────────────────────────────────────────────
   useEffect(() => {
-    getExpedisiList().then((list) => {
-      setExpedisiList(list);
-      setExpedisiLoading(false);
-    });
-    getSettings().then(setSettings);
+    const load = async () => {
+      try {
+        const [list] = await Promise.all([
+          getExpedisiList(),
+          getSettings().then(setSettings).catch(() => {}),
+        ]);
+        setExpedisiList(list);
+      } catch (err) {
+        setExpedisiError("Gagal memuat data ekspedisi. Periksa koneksi internet atau izin Firestore.");
+        console.error("getExpedisiList error:", err);
+      } finally {
+        setExpedisiLoading(false);
+      }
+    };
+    load();
   }, []);
 
   // ── Load karung when expedisi selected ──────────────────────────────────
   useEffect(() => {
     if (!selectedExpedisi) return;
     setKarungLoading(true);
-    getTodayKarungByExpedisi(selectedExpedisi.id, today).then((list) => {
-      setKarungList(list);
-      setKarungLoading(false);
-    });
+    getTodayKarungByExpedisi(selectedExpedisi.id, today)
+      .then((list) => setKarungList(list))
+      .catch((err) => console.error("getTodayKarung error:", err))
+      .finally(() => setKarungLoading(false));
   }, [selectedExpedisi, today]);
 
   // ── Subscribe to live scan count for selected karung ────────────────────
@@ -202,12 +216,42 @@ export default function ScanPage() {
     }
   };
 
-  // ── Add new expedisi ─────────────────────────────────────────────────────
+  // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
   const handleAddExpedisi = async () => {
     if (!newExpedisiName.trim() || !appUser) return;
     setAddingExpedisi(true);
+    setExpedisiExistMsg("");
+
+    // Cek apakah nama sudah ada (aktif maupun tidak)
+    const existing = await findExpedisiByName(newExpedisiName.trim());
+    if (existing) {
+      // Gunakan yang sudah ada
+      if (!existing.active) {
+        // Aktifkan kembali jika nonaktif
+        await updateDoc(doc(db, "expedisi", existing.id), { active: true });
+        existing.active = true;
+      }
+      setExpedisiExistMsg(
+        `Ekspedisi "${existing.name}" sudah ada di master data — langsung digunakan.`
+      );
+      // Pastikan ada di list
+      setExpedisiList((prev) =>
+        prev.find((e) => e.id === existing.id)
+          ? prev
+          : [...prev, existing].sort((a, b) => a.name.localeCompare(b.name, "id"))
+      );
+      setSelectedExpedisi(existing);
+      setNewExpedisiName("");
+      setAddingExpedisi(false);
+      setStep("select-karung");
+      return;
+    }
+
+    // Buat baru
     const exp = await createExpedisi(newExpedisiName.trim(), appUser.uid, appUser.name);
-    setExpedisiList((prev) => [...prev, exp]);
+    setExpedisiList((prev) =>
+      [...prev, exp].sort((a, b) => a.name.localeCompare(b.name, "id"))
+    );
     setSelectedExpedisi(exp);
     setNewExpedisiName("");
     setAddingExpedisi(false);
@@ -258,13 +302,19 @@ export default function ScanPage() {
             <Truck className="w-5 h-5 text-green-600" /> Pilih Ekspedisi
           </h2>
 
+          {expedisiError && (
+            <div className="mb-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+              ⚠️ {expedisiError}
+            </div>
+          )}
+
           {expedisiLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="w-6 h-6 animate-spin text-green-600" />
             </div>
           ) : (
             <div className="space-y-2 mb-6">
-              {expedisiList.length === 0 && (
+              {expedisiList.length === 0 && !expedisiError && (
                 <p className="text-slate-400 text-sm text-center py-4">
                   Belum ada data ekspedisi. Tambahkan di bawah.
                 </p>
@@ -314,9 +364,14 @@ export default function ScanPage() {
                 className="btn-primary flex-shrink-0"
               >
                 {addingExpedisi ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                Tambah
+                Gunakan
               </button>
             </div>
+            {expedisiExistMsg && (
+              <p className="mt-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                ℹ️ {expedisiExistMsg}
+              </p>
+            )}
           </div>
         </div>
       </div>
