@@ -27,7 +27,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const ROWS_PER_PAGE = 30;
+// F4 (215×330mm), compact rows — 33 per page fills each page, last page has remainder
+const ROWS_PER_PAGE = 33;
 
 export default function PrintPage() {
   return (
@@ -96,7 +97,12 @@ function PrintPageInner() {
     const run = async () => {
       // 1. Load karung docs from Firestore (metadata + lock status)
       const karungDocs = await Promise.all(activeIds.map((id) => getKarung(id)));
-      const karung = karungDocs.filter(Boolean) as Karung[];
+      const karung = (karungDocs.filter(Boolean) as Karung[]).sort((a, b) => {
+        const na = parseInt(a.nomorKarung, 10);
+        const nb = parseInt(b.nomorKarung, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.nomorKarung.localeCompare(b.nomorKarung);
+      });
       setKarungList(karung);
 
       if (karung.length === 0) { setLoading(false); return; }
@@ -541,7 +547,7 @@ function PrintPageInner() {
                     <tr style={{ backgroundColor: "#0f172a" }}>
                       {["No.", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"].map((h, i) => (
                         <th key={i} style={{
-                          padding: "9px 10px",
+                          padding: "7px 8px",
                           color: "#ffffff",
                           fontWeight: "600",
                           fontSize: "11px",
@@ -565,12 +571,12 @@ function PrintPageInner() {
                       const isEven = i % 2 === 0;
                       return (
                         <tr key={i} style={{ backgroundColor: isEven ? "#ffffff" : "#f8fafc" }}>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{globalNo}</td>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "11px" }}>{row[1]}</td>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
-                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{globalNo}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "11px" }}>{row[1]}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
+                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
                         </tr>
                       );
                     })}
@@ -579,7 +585,7 @@ function PrintPageInner() {
                   {pageIndex === totalPages - 1 && (
                     <tfoot>
                       <tr style={{ backgroundColor: "#f1f5f9" }}>
-                        <td colSpan={6} style={{ padding: "7px 10px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "11px", color: "#0f172a" }}>
+                        <td colSpan={6} style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "11px", color: "#0f172a" }}>
                           Total Keseluruhan : {sheetRows.length} resi
                         </td>
                       </tr>
@@ -654,11 +660,44 @@ function PrintPageInner() {
 
       <style>{`
         @media print {
-          .no-print { display: none !important; }
-          body { background: white !important; margin: 0; padding: 0; }
-          .print-container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
-          .print-container > div { box-shadow: none !important; border: none !important; border-radius: 0 !important; margin: 0 !important; }
-          @page { margin: 1.2cm 1.5cm; size: A4 portrait; }
+          /* Paksa cetak warna — tanpa ini background gelap tidak muncul */
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          /* Sembunyikan semua elemen layout (sidebar, header, dll) */
+          body * { visibility: hidden; }
+
+          /* Tampilkan hanya konten cetak */
+          .print-container,
+          .print-container * { visibility: visible; }
+
+          /* Posisikan di pojok kiri atas, full width */
+          .print-container {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: white !important;
+          }
+
+          /* Bersihkan styling wrapper card per halaman */
+          .print-container > div {
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            margin: 0 !important;
+          }
+
+          /* Ukuran kertas F4, margin cetak */
+          @page {
+            size: 215mm 330mm portrait;
+            margin: 1.2cm 1.5cm;
+          }
         }
       `}</style>
     </>
