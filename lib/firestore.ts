@@ -50,6 +50,21 @@ export async function saveSettings(data: Partial<CompanySettings>, uid: string) 
   );
 }
 
+/** Inisialisasi settings dengan nilai default jika belum ada. */
+export async function initSettings(uid: string) {
+  const snap = await getDoc(doc(db, "settings", "company"));
+  if (!snap.exists()) {
+    await setDoc(doc(db, "settings", "company"), {
+      namaPerusahaan: "PT. IEG",
+      noteTandaTerima:
+        "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG",
+      spreadsheetId: "",
+      updatedAt: serverTimestamp(),
+      updatedBy: uid,
+    });
+  }
+}
+
 // ─── USERS ─────────────────────────────────────────────────────────────────
 
 export async function getUsers(): Promise<AppUser[]> {
@@ -139,6 +154,11 @@ export async function createExpedisi(
 
 export async function updateExpedisi(id: string, data: Partial<Expedisi>) {
   await updateDoc(doc(db, "expedisi", id), data);
+}
+
+export async function deleteExpedisi(id: string) {
+  // Soft delete — set active: false
+  await updateDoc(doc(db, "expedisi", id), { active: false });
 }
 
 // ─── KARUNG ────────────────────────────────────────────────────────────────
