@@ -121,6 +121,12 @@ export async function getAllExpedisi(): Promise<Expedisi[]> {
     .sort((a, b) => a.name.localeCompare(b.name, "id"));
 }
 
+export async function getExpedisiById(id: string): Promise<Expedisi | null> {
+  const snap = await getDoc(doc(db, "expedisi", id));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() } as Expedisi;
+}
+
 /**
  * Cari expedisi berdasarkan nama (case-insensitive).
  * Returns null jika tidak ada.

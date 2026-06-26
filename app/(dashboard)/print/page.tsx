@@ -5,14 +5,14 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   getKarung,
-  getScansByKarung,
   lockKarung,
   getSettings,
   isKarungLocked,
   getKarungHistory,
+  getExpedisiById,
 } from "@/lib/firestore";
-import { todayString, formatDate } from "@/lib/utils";
-import type { Karung, ScanRecord, CompanySettings } from "@/types";
+import { todayString, formatDate, sheetTabName } from "@/lib/utils";
+import type { Karung, CompanySettings } from "@/types";
 import {
   Printer,
   ArrowLeft,
@@ -23,6 +23,8 @@ import {
   CheckSquare,
   Square,
   Truck,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 
 const ROWS_PER_PAGE = 30;
@@ -39,22 +41,19 @@ export default function PrintPage() {
   );
 }
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 interface ExpedisiGroup {
   expedisiId: string;
   expedisiName: string;
   karungList: Karung[];
 }
 
-// ── Inner component ──────────────────────────────────────────────────────────
+// ─── Main component ──────────────────────────────────────────────────────────
 
 function PrintPageInner() {
   const { appUser } = useAuth();
   const params = useSearchParams();
   const router = useRouter();
 
-  // Support both legacy ?karungId=x and new ?karungIds=x,y,z
   const karungIdSingle = params.get("karungId");
   const karungIdsParam = params.get("karungIds");
   const activeIds: string[] = karungIdsParam
@@ -66,46 +65,81 @@ function PrintPageInner() {
   const today = todayString();
 
   // ── Print view state ──────────────────────────────────────────────────────
-  const [karungList, setKarungList] = useState<Karung[]>([]);
-  const [allScans, setAllScans] = useState<ScanRecord[]>([]);
-  const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [printing, setPrinting] = useState(false);
-  const [locking, setLocking] = useState(false);
+  const [karungList, setKarungList]     = useState<Karung[]>([]);
+  const [sheetRows, setSheetRows]       = useState<string[][]>([]);
+  const [sheetError, setSheetError]     = useState("");
+  const [sheetName, setSheetName]       = useState("");
+  const [settings, setSettings]         = useState<CompanySettings | null>(null);
+  const [loading, setLoading]           = useState(false);
+  const [printing, setPrinting]         = useState(false);
+  const [locking, setLocking]           = useState(false);
 
   // ── Selector state ────────────────────────────────────────────────────────
-  const [selectorDate, setSelectorDate] = useState(today);
+  const [selectorDate, setSelectorDate]     = useState(today);
   const [expedisiGroups, setExpedisiGroups] = useState<ExpedisiGroup[]>([]);
   const [selectorLoading, setSelectorLoading] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedIds, setSelectedIds]       = useState<Set<string>>(new Set());
   const [activeExpedisi, setActiveExpedisi] = useState<string | null>(null);
 
-  // ── Load settings always ──────────────────────────────────────────────────
+  // ── Load settings ─────────────────────────────────────────────────────────
   useEffect(() => {
     getSettings().then(setSettings);
   }, []);
 
-  // ── Load karung for print view ────────────────────────────────────────────
+  // ── Load data for print view ──────────────────────────────────────────────
   useEffect(() => {
     if (activeIds.length === 0) return;
     setLoading(true);
-    Promise.all(
-      activeIds.map((id) =>
-        Promise.all([getKarung(id), getScansByKarung(id)])
-      )
-    ).then((results) => {
-      const karung = results.map(([k]) => k).filter(Boolean) as Karung[];
-      const scans = results.flatMap(([, s]) => s as ScanRecord[]).sort((a, b) => {
-        // Sort by karung order first, then by scan time
-        const ai = karung.findIndex((k) => k.id === a.karungId);
-        const bi = karung.findIndex((k) => k.id === b.karungId);
-        if (ai !== bi) return ai - bi;
-        const ta = (a.scannedAt as { seconds: number })?.seconds ?? 0;
-        const tb = (b.scannedAt as { seconds: number })?.seconds ?? 0;
-        return ta - tb;
-      });
+    setSheetError("");
+    setSheetRows([]);
+
+    const run = async () => {
+      // 1. Load karung docs from Firestore (metadata + lock status)
+      const karungDocs = await Promise.all(activeIds.map((id) => getKarung(id)));
+      const karung = karungDocs.filter(Boolean) as Karung[];
       setKarungList(karung);
-      setAllScans(scans);
+
+      if (karung.length === 0) { setLoading(false); return; }
+
+      // 2. Load settings for spreadsheetId + company info
+      const cfg = await getSettings();
+      setSettings(cfg);
+      const spreadsheetId = cfg?.spreadsheetId;
+      if (!spreadsheetId) {
+        setSheetError("Spreadsheet ID belum dikonfigurasi. Buka menu Settings → isi Spreadsheet ID.");
+        setLoading(false);
+        return;
+      }
+
+      // 3. Get expedisi code (for sheet tab name)
+      const expedisi = await getExpedisiById(karung[0].expedisiId);
+      const expedisiCode =
+        expedisi?.code ??
+        karung[0].expedisiName.toUpperCase().replace(/\s+/g, "_").slice(0, 20);
+
+      // 4. Fetch scan rows from G-Sheet
+      const date = karung[0].date;
+      const karungNomors = karung.map((k) => k.nomorKarung).join(",");
+      const url = `/api/gsheet/read?spreadsheetId=${encodeURIComponent(spreadsheetId)}&expedisiCode=${encodeURIComponent(expedisiCode)}&date=${date}&karungNomors=${encodeURIComponent(karungNomors)}`;
+
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (data.notFound) {
+        const expectedTab = sheetTabName(expedisiCode, date);
+        setSheetError(`Sheet tab "${expectedTab}" tidak ditemukan. Pastikan sudah ada scan yang tersinkron ke Google Sheets.`);
+      } else if (data.error) {
+        setSheetError(data.error);
+      } else {
+        setSheetRows(data.rows ?? []);
+        setSheetName(data.sheetName ?? "");
+      }
+
+      setLoading(false);
+    };
+
+    run().catch((err) => {
+      setSheetError(String(err));
       setLoading(false);
     });
   }, [karungIdsParam, karungIdSingle]); // eslint-disable-line
@@ -121,8 +155,6 @@ function PrintPageInner() {
     setSelectedIds(new Set());
     setActiveExpedisi(null);
     const list = await getKarungHistory(date, date);
-
-    // Group by expedisi
     const groups: Record<string, ExpedisiGroup> = {};
     for (const k of list) {
       if (!groups[k.expedisiId]) {
@@ -134,23 +166,22 @@ function PrintPageInner() {
       }
       groups[k.expedisiId].karungList.push(k);
     }
-    setExpedisiGroups(Object.values(groups).sort((a, b) =>
-      a.expedisiName.localeCompare(b.expedisiName, "id")
-    ));
+    setExpedisiGroups(
+      Object.values(groups).sort((a, b) =>
+        a.expedisiName.localeCompare(b.expedisiName, "id")
+      )
+    );
     setSelectorLoading(false);
   };
 
-  // ── Checkbox logic — only allow selection within one expedisi ─────────────
+  // ── Checkbox — single expedisi only ──────────────────────────────────────
   const toggleKarung = (karung: Karung) => {
     const newSet = new Set(selectedIds);
     if (newSet.has(karung.id)) {
       newSet.delete(karung.id);
       if (newSet.size === 0) setActiveExpedisi(null);
     } else {
-      // If switching expedisi, clear previous selection
-      if (activeExpedisi && activeExpedisi !== karung.expedisiId) {
-        newSet.clear();
-      }
+      if (activeExpedisi && activeExpedisi !== karung.expedisiId) newSet.clear();
       newSet.add(karung.id);
       setActiveExpedisi(karung.expedisiId);
     }
@@ -164,7 +195,6 @@ function PrintPageInner() {
       group.karungList.forEach((k) => newSet.delete(k.id));
       if (newSet.size === 0) setActiveExpedisi(null);
     } else {
-      // Clear other expedisi first
       if (activeExpedisi && activeExpedisi !== group.expedisiId) newSet.clear();
       group.karungList.forEach((k) => newSet.add(k.id));
       setActiveExpedisi(group.expedisiId);
@@ -174,11 +204,10 @@ function PrintPageInner() {
 
   const handlePrintSelected = () => {
     if (selectedIds.size === 0) return;
-    const ids = Array.from(selectedIds).join(",");
-    router.push(`/print?karungIds=${ids}`);
+    router.push(`/print?karungIds=${Array.from(selectedIds).join(",")}`);
   };
 
-  // ── Print handler ─────────────────────────────────────────────────────────
+  // ── Print — lock all unlocked karung ─────────────────────────────────────
   const handlePrint = async () => {
     if (!appUser || karungList.length === 0) return;
     const unlocked = karungList.filter((k) => !isKarungLocked(k));
@@ -195,26 +224,22 @@ function PrintPageInner() {
       setLocking(false);
     }
     setPrinting(true);
-    setTimeout(() => {
-      window.print();
-      setPrinting(false);
-    }, 300);
+    setTimeout(() => { window.print(); setPrinting(false); }, 300);
   };
 
-  // ── Derived print data ────────────────────────────────────────────────────
-  const expedisiName = karungList[0]?.expedisiName ?? "";
-  const karungNomors = karungList.map((k) => `#${k.nomorKarung}`).join(", ");
-  const printDate = karungList[0]?.date ?? today;
-  const namaPerusahaan = settings?.namaPerusahaan || "PT. IEG";
-  const noteTandaTerima =
-    settings?.noteTandaTerima ||
+  // ── Derived print vars ────────────────────────────────────────────────────
+  const expedisiName     = karungList[0]?.expedisiName ?? "";
+  const karungNomors     = karungList.map((k) => `#${k.nomorKarung}`).join(", ");
+  const printDate        = karungList[0]?.date ?? today;
+  const namaPerusahaan   = settings?.namaPerusahaan || "PT. IEG";
+  const noteTandaTerima  = settings?.noteTandaTerima ||
     "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG";
+  const anyLocked        = karungList.some((k) => isKarungLocked(k));
 
-  const totalPages = Math.max(1, Math.ceil(allScans.length / ROWS_PER_PAGE));
-  const pages: ScanRecord[][] = Array.from({ length: totalPages }, (_, i) =>
-    allScans.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE)
+  const totalPages  = Math.max(1, Math.ceil(sheetRows.length / ROWS_PER_PAGE));
+  const pages       = Array.from({ length: totalPages }, (_, i) =>
+    sheetRows.slice(i * ROWS_PER_PAGE, (i + 1) * ROWS_PER_PAGE)
   );
-  const anyLocked = karungList.some((k) => isKarungLocked(k));
 
   // ════════════════════════════════════════════════════════════════════════════
   // SELECTOR VIEW
@@ -231,21 +256,16 @@ function PrintPageInner() {
           </p>
         </div>
 
-        {/* Date picker */}
         <div className="card p-4">
           <label className="text-xs text-slate-500 mb-1 block">Tanggal</label>
           <input
             type="date"
             value={selectorDate}
-            onChange={(e) => {
-              setSelectorDate(e.target.value);
-              loadSelectorKarung(e.target.value);
-            }}
+            onChange={(e) => { setSelectorDate(e.target.value); loadSelectorKarung(e.target.value); }}
             className="input-field max-w-xs"
           />
         </div>
 
-        {/* Print selected floating bar */}
         {selectedIds.size > 0 && (
           <div className="sticky top-4 z-20 bg-green-600 text-white rounded-2xl px-5 py-3 flex items-center justify-between shadow-lg shadow-green-200">
             <span className="text-sm font-medium">
@@ -261,7 +281,6 @@ function PrintPageInner() {
           </div>
         )}
 
-        {/* Karung list grouped by expedisi */}
         {selectorLoading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-green-600" />
@@ -276,41 +295,30 @@ function PrintPageInner() {
             {expedisiGroups.map((group) => {
               const allSel = group.karungList.every((k) => selectedIds.has(k.id));
               const someSel = group.karungList.some((k) => selectedIds.has(k.id));
-              const isDisabled =
-                activeExpedisi !== null && activeExpedisi !== group.expedisiId;
+              const isDisabled = activeExpedisi !== null && activeExpedisi !== group.expedisiId;
 
               return (
-                <div
-                  key={group.expedisiId}
-                  className={`card overflow-hidden transition-all ${isDisabled ? "opacity-40" : ""}`}
-                >
-                  {/* Expedisi header */}
+                <div key={group.expedisiId} className={`card overflow-hidden transition-all ${isDisabled ? "opacity-40" : ""}`}>
                   <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-100">
                     <div className="flex items-center gap-2.5">
                       <Truck className="w-4 h-4 text-slate-500" />
-                      <span className="font-semibold text-slate-800">
-                        {group.expedisiName}
-                      </span>
-                      <span className="badge-info text-xs">
-                        {group.karungList.length} karung
-                      </span>
+                      <span className="font-semibold text-slate-800">{group.expedisiName}</span>
+                      <span className="badge-info text-xs">{group.karungList.length} karung</span>
                     </div>
                     {!isDisabled && (
                       <button
                         onClick={() => toggleAllInExpedisi(group)}
                         className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-green-700 transition-colors"
                       >
-                        {allSel ? (
-                          <CheckSquare className="w-4 h-4 text-green-600" />
-                        ) : (
-                          <Square className="w-4 h-4" />
-                        )}
+                        {allSel
+                          ? <CheckSquare className="w-4 h-4 text-green-600" />
+                          : <Square className="w-4 h-4" />
+                        }
                         {allSel ? "Batalkan semua" : "Pilih semua"}
                       </button>
                     )}
                   </div>
 
-                  {/* Karung rows */}
                   <div className="divide-y divide-slate-100">
                     {group.karungList.map((k) => {
                       const checked = selectedIds.has(k.id);
@@ -337,24 +345,16 @@ function PrintPageInner() {
                             )}
                           </div>
                           <div className="flex-1">
-                            <p className="font-medium text-slate-800 text-sm">
-                              Karung #{k.nomorKarung}
-                            </p>
-                            <p className="text-xs text-slate-400">
-                              {k.totalResi} resi
-                            </p>
+                            <p className="font-medium text-slate-800 text-sm">Karung #{k.nomorKarung}</p>
+                            <p className="text-xs text-slate-400">{k.totalResi} resi</p>
                           </div>
                           {isKarungLocked(k) && (
                             <span className="badge-warning flex items-center gap-1 text-xs">
                               <Lock className="w-3 h-3" /> Terkunci
                             </span>
                           )}
-                          {/* Single print button */}
                           <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              router.push(`/print?karungId=${k.id}`);
-                            }}
+                            onClick={(e) => { e.preventDefault(); router.push(`/print?karungId=${k.id}`); }}
                             className="btn-ghost px-2.5 py-1.5 text-xs text-slate-400 hover:text-green-700"
                             title="Print karung ini saja"
                           >
@@ -365,13 +365,9 @@ function PrintPageInner() {
                     })}
                   </div>
 
-                  {/* Per-expedisi print button when some selected */}
                   {someSel && (
                     <div className="px-4 py-3 bg-green-50 border-t border-green-100">
-                      <button
-                        onClick={handlePrintSelected}
-                        className="btn-primary w-full text-sm"
-                      >
+                      <button onClick={handlePrintSelected} className="btn-primary w-full text-sm">
                         <Printer className="w-4 h-4" />
                         Print Gabungan {selectedIds.size} Karung ({group.expedisiName})
                       </button>
@@ -392,8 +388,9 @@ function PrintPageInner() {
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center min-h-[300px]">
+      <div className="flex flex-col justify-center items-center min-h-[300px] gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-green-600" />
+        <p className="text-sm text-slate-400">Mengambil data dari Google Sheets...</p>
       </div>
     );
   }
@@ -403,9 +400,7 @@ function PrintPageInner() {
       <div className="text-center py-12 text-slate-400">
         <Package className="w-12 h-12 mx-auto mb-3 opacity-30" />
         <p>Karung tidak ditemukan</p>
-        <button onClick={() => router.push("/print")} className="btn-secondary mt-4">
-          Kembali
-        </button>
+        <button onClick={() => router.push("/print")} className="btn-secondary mt-4">Kembali</button>
       </div>
     );
   }
@@ -419,11 +414,10 @@ function PrintPageInner() {
             <ArrowLeft className="w-4 h-4" /> Kembali
           </button>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">
-              Preview Tanda Terima
-            </h1>
+            <h1 className="text-xl font-bold text-slate-900">Preview Tanda Terima</h1>
             <p className="text-sm text-slate-500">
-              {expedisiName} · Karung {karungNomors} · {allScans.length} resi total
+              {expedisiName} · Karung {karungNomors} · {sheetRows.length} resi
+              {sheetName && <span className="ml-2 text-slate-400">(Sheet: {sheetName})</span>}
             </p>
           </div>
         </div>
@@ -435,7 +429,7 @@ function PrintPageInner() {
           )}
           <button
             onClick={handlePrint}
-            disabled={printing || locking}
+            disabled={printing || locking || !!sheetError}
             className="btn-primary"
           >
             {printing || locking
@@ -447,123 +441,120 @@ function PrintPageInner() {
         </div>
       </div>
 
-      {/* Print pages */}
-      <div className="print-container max-w-5xl mx-auto space-y-8">
-        {pages.map((pageScans, pageIndex) => (
-          <div
-            key={pageIndex}
-            className={`bg-white border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none ${
-              pageIndex > 0 ? "print:break-before-page" : ""
-            }`}
-          >
-            {/* Page indicator */}
-            {totalPages > 1 && (
-              <div className="bg-slate-800 text-white text-xs px-6 py-2 text-right no-print">
-                Halaman {pageIndex + 1} dari {totalPages}
-              </div>
-            )}
-
-            <div className="p-8">
-              {/* Header */}
-              <div className="text-center mb-6 border-b-2 border-slate-800 pb-4">
-                <h1 className="text-xl font-bold text-slate-900 uppercase tracking-wide">
-                  TANDA TERIMA DARI EKSPEDISI {expedisiName.toUpperCase()}
-                </h1>
-                <div className="flex flex-wrap justify-center gap-6 mt-3 text-sm text-slate-600">
-                  <span><strong>Tanggal:</strong> {formatDate(printDate)}</span>
-                  <span>
-                    <strong>No. Karung:</strong>{" "}
-                    {karungList.map((k) => k.nomorKarung).join(", ")}
-                  </span>
-                  <span><strong>Total Resi:</strong> {allScans.length}</span>
-                  {totalPages > 1 && (
-                    <span className="text-slate-400">
-                      Hal. {pageIndex + 1}/{totalPages}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Table */}
-              <table className="w-full text-sm border-collapse mb-6">
-                <thead>
-                  <tr className="bg-slate-800 text-white">
-                    <th className="px-3 py-2.5 text-left border border-slate-600 w-10">No.</th>
-                    <th className="px-3 py-2.5 text-left border border-slate-600">Kode Resi</th>
-                    <th className="px-3 py-2.5 text-left border border-slate-600 w-24">No. Karung</th>
-                    <th className="px-3 py-2.5 text-left border border-slate-600 w-36">Di Scan Oleh</th>
-                    <th className="px-3 py-2.5 text-left border border-slate-600 w-24">Tanggal</th>
-                    <th className="px-3 py-2.5 text-left border border-slate-600 w-20">Jam</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pageScans.map((scan, i) => {
-                    const rowNum = pageIndex * ROWS_PER_PAGE + i + 1;
-                    const scanDate = (scan.scannedAt as { toDate?: () => Date })?.toDate?.() || new Date();
-                    return (
-                      <tr key={scan.id} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                        <td className="px-3 py-2 border border-slate-200 text-slate-500 text-center">
-                          {rowNum}
-                        </td>
-                        <td className="px-3 py-2 border border-slate-200 font-mono font-medium text-slate-900">
-                          {scan.noResi}
-                        </td>
-                        <td className="px-3 py-2 border border-slate-200 text-slate-600">
-                          {scan.nomorKarung}
-                        </td>
-                        <td className="px-3 py-2 border border-slate-200 text-slate-600">
-                          {scan.scannedByName}
-                        </td>
-                        <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">
-                          {scanDate.toLocaleDateString("id-ID", {
-                            day: "2-digit",
-                            month: "2-digit",
-                            year: "numeric",
-                          })}
-                        </td>
-                        <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">
-                          {scanDate.toLocaleTimeString("id-ID", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-
-              {/* Footer — last page only */}
-              {pageIndex === totalPages - 1 && (
-                <>
-                  <div className="border border-slate-300 rounded-lg px-4 py-3 mb-8 bg-amber-50">
-                    <p className="text-xs text-slate-700">
-                      <strong>Note : </strong>{noteTandaTerima}
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-16 mt-4">
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-slate-700 mb-16">Diserahkan Oleh :</p>
-                      <div className="border-t border-slate-400 pt-2">
-                        <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
-                        <p className="text-xs text-slate-500">{expedisiName}</p>
-                      </div>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-slate-700 mb-16">Diterima Oleh :</p>
-                      <div className="border-t border-slate-400 pt-2">
-                        <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
-                        <p className="text-xs text-slate-500">{namaPerusahaan}</p>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
+      {/* G-Sheet error */}
+      {sheetError && (
+        <div className="no-print max-w-5xl mx-auto mb-6 bg-red-50 border border-red-200 rounded-xl px-5 py-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-medium text-red-700 text-sm">Gagal memuat data dari Google Sheets</p>
+            <p className="text-red-600 text-xs mt-1">{sheetError}</p>
           </div>
-        ))}
-      </div>
+          <button
+            onClick={() => { setSheetError(""); setLoading(true); router.refresh(); }}
+            className="btn-ghost text-xs text-red-600"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Coba lagi
+          </button>
+        </div>
+      )}
+
+      {/* Print pages */}
+      {!sheetError && (
+        <div className="print-container max-w-5xl mx-auto space-y-8">
+          {pages.map((pageRows, pageIndex) => (
+            <div
+              key={pageIndex}
+              className={`bg-white border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none ${
+                pageIndex > 0 ? "print:break-before-page" : ""
+              }`}
+            >
+              {totalPages > 1 && (
+                <div className="bg-slate-800 text-white text-xs px-6 py-2 text-right no-print">
+                  Halaman {pageIndex + 1} dari {totalPages}
+                </div>
+              )}
+
+              <div className="p-8">
+                {/* Header */}
+                <div className="text-center mb-6 border-b-2 border-slate-800 pb-4">
+                  <h1 className="text-xl font-bold text-slate-900 uppercase tracking-wide">
+                    TANDA TERIMA DARI EKSPEDISI {expedisiName.toUpperCase()}
+                  </h1>
+                  <div className="flex flex-wrap justify-center gap-6 mt-3 text-sm text-slate-600">
+                    <span><strong>Tanggal:</strong> {formatDate(printDate)}</span>
+                    <span>
+                      <strong>No. Karung:</strong>{" "}
+                      {karungList.map((k) => k.nomorKarung).join(", ")}
+                    </span>
+                    <span><strong>Total Resi:</strong> {sheetRows.length}</span>
+                    {totalPages > 1 && (
+                      <span className="text-slate-400">
+                        Hal. {pageIndex + 1}/{totalPages}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Table — columns from G-Sheet: No, Resi, Karung, Operator, Tgl, Jam */}
+                <table className="w-full text-sm border-collapse mb-6">
+                  <thead>
+                    <tr className="bg-slate-800 text-white">
+                      <th className="px-3 py-2.5 text-left border border-slate-600 w-10">No.</th>
+                      <th className="px-3 py-2.5 text-left border border-slate-600">Kode Resi</th>
+                      <th className="px-3 py-2.5 text-left border border-slate-600 w-24">No. Karung</th>
+                      <th className="px-3 py-2.5 text-left border border-slate-600 w-36">Di Scan Oleh</th>
+                      <th className="px-3 py-2.5 text-left border border-slate-600 w-28">Tanggal</th>
+                      <th className="px-3 py-2.5 text-left border border-slate-600 w-20">Jam</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map((row, i) => {
+                      const globalNo = pageIndex * ROWS_PER_PAGE + i + 1;
+                      return (
+                        <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
+                          <td className="px-3 py-2 border border-slate-200 text-slate-500 text-center">{globalNo}</td>
+                          <td className="px-3 py-2 border border-slate-200 font-mono font-medium text-slate-900">{row[1]}</td>
+                          <td className="px-3 py-2 border border-slate-200 text-slate-600">{row[2]}</td>
+                          <td className="px-3 py-2 border border-slate-200 text-slate-600">{row[3]}</td>
+                          <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">{row[4]}</td>
+                          <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">{row[5]}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Footer — last page only */}
+                {pageIndex === totalPages - 1 && (
+                  <>
+                    <div className="border border-slate-300 rounded-lg px-4 py-3 mb-8 bg-amber-50">
+                      <p className="text-xs text-slate-700">
+                        <strong>Note : </strong>{noteTandaTerima}
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-16 mt-4">
+                      <div className="text-center">
+                        <p className="text-sm font-medium text-slate-700 mb-16">Diserahkan Oleh :</p>
+                        <div className="border-t border-slate-400 pt-2">
+                          <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
+                          <p className="text-xs text-slate-500">{expedisiName}</p>
+                        </div>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-medium text-slate-700 mb-16">Diterima Oleh :</p>
+                        <div className="border-t border-slate-400 pt-2">
+                          <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
+                          <p className="text-xs text-slate-500">{namaPerusahaan}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <style>{`
         @media print {
