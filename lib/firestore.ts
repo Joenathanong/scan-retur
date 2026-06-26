@@ -161,6 +161,17 @@ export async function deleteExpedisi(id: string) {
   await updateDoc(doc(db, "expedisi", id), { active: false });
 }
 
+// ── KARUNG NOMOR EDIT ───────────────────────────────────────────────────────
+export async function updateKarungNomor(
+  id: string,
+  nomorKarung: string,
+  uid: string,
+  userName: string
+) {
+  await updateDoc(doc(db, "karung", id), { nomorKarung });
+  await addAuditLog(uid, userName, "EDIT_KARUNG_NOMOR", `Edit nomor karung ID ${id} → ${nomorKarung}`);
+}
+
 // ─── KARUNG ────────────────────────────────────────────────────────────────
 
 /**

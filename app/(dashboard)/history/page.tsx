@@ -11,6 +11,7 @@ import {
   relockKarung,
   isKarungLocked,
   getAuditLogs,
+  updateKarungNomor,
 } from "@/lib/firestore";
 import { todayString, formatDate, formatDateTime, cn } from "@/lib/utils";
 import type { Karung, AuditLog } from "@/types";
@@ -19,7 +20,6 @@ import {
   Package,
   Truck,
   Lock,
-  Unlock,
   Printer,
   ChevronDown,
   ChevronUp,
@@ -29,6 +29,9 @@ import {
   Eye,
   FileText,
   LockOpen,
+  Edit2,
+  Check,
+  X,
 } from "lucide-react";
 
 export default function HistoryPage() {
@@ -44,6 +47,9 @@ export default function HistoryPage() {
   const [expandedScans, setExpandedScans] = useState<Record<string, { noResi: string; scannedByName: string; scannedAt: Date }[]>>({});
   const [loadingScans, setLoadingScans] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [editingNomor, setEditingNomor] = useState<string | null>(null);
+  const [editNomorValue, setEditNomorValue] = useState("");
+  const [savingNomor, setSavingNomor] = useState(false);
   const [tab, setTab] = useState<"karung" | "audit">("karung");
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -97,6 +103,29 @@ export default function HistoryPage() {
     await relockKarung(k.id, appUser.uid, appUser.name);
     await loadKarung();
     setActionLoading(null);
+  };
+
+  const startEditNomor = (k: Karung) => {
+    setEditingNomor(k.id);
+    setEditNomorValue(k.nomorKarung);
+  };
+
+  const cancelEditNomor = () => {
+    setEditingNomor(null);
+    setEditNomorValue("");
+  };
+
+  const saveNomor = async (k: Karung) => {
+    if (!appUser || !editNomorValue.trim()) return;
+    setSavingNomor(true);
+    await updateKarungNomor(k.id, editNomorValue.trim(), appUser.uid, appUser.name);
+    setKarungList((prev) =>
+      prev.map((item) =>
+        item.id === k.id ? { ...item, nomorKarung: editNomorValue.trim() } : item
+      )
+    );
+    setEditingNomor(null);
+    setSavingNomor(false);
   };
 
   const loadAudit = async () => {
@@ -209,7 +238,47 @@ export default function HistoryPage() {
 
                       <div className="flex-1 min-w-[160px]">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <p className="font-semibold text-slate-800">Karung #{k.nomorKarung}</p>
+                          {editingNomor === k.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-slate-500 font-semibold text-sm">Karung #</span>
+                              <input
+                                autoFocus
+                                value={editNomorValue}
+                                onChange={(e) => setEditNomorValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") saveNomor(k);
+                                  if (e.key === "Escape") cancelEditNomor();
+                                }}
+                                className="border border-green-400 rounded-lg px-2 py-0.5 text-sm font-semibold w-24 focus:outline-none focus:ring-2 focus:ring-green-400"
+                              />
+                              <button
+                                onClick={() => saveNomor(k)}
+                                disabled={savingNomor}
+                                className="p-1 text-green-600 hover:bg-green-50 rounded"
+                              >
+                                {savingNomor ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={cancelEditNomor}
+                                className="p-1 text-slate-400 hover:bg-slate-100 rounded"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-semibold text-slate-800">Karung #{k.nomorKarung}</p>
+                              {isAdmin && (
+                                <button
+                                  onClick={() => startEditNomor(k)}
+                                  className="p-1 text-slate-300 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                                  title="Edit nomor karung"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                           {locked ? (
                             k.status === "admin_unlocked"
                               ? <span className="badge-warning">Admin Unlock</span>
