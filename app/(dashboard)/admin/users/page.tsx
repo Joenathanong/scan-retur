@@ -4,17 +4,12 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getUsers,
-  createUserDoc,
   updateUser,
   toggleUserActive,
   addAuditLog,
 } from "@/lib/firestore";
 import { auth } from "@/lib/firebase";
-import {
-  createUserWithEmailAndPassword,
-  updatePassword,
-  sendPasswordResetEmail,
-} from "firebase/auth";
+import { sendPasswordResetEmail } from "firebase/auth";
 import AuthGuard from "@/components/AuthGuard";
 import type { AppUser, UserRole } from "@/types";
 import {
@@ -24,10 +19,6 @@ import {
   Check,
   X,
   Edit2,
-  Mail,
-  KeyRound,
-  UserCog,
-  ShieldCheck,
   UserX,
   UserCheck,
   Eye,
@@ -47,15 +38,16 @@ const defaultForm: UserForm = { name: "", email: "", password: "", role: "operat
 export default function AdminUsersPage() {
   const { appUser } = useAuth();
 
-  const [users, setUsers] = useState<AppUser[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [editUser, setEditUser] = useState<AppUser | null>(null);
-  const [form, setForm] = useState<UserForm>(defaultForm);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [resetEmailSent, setResetEmailSent] = useState<string | null>(null);
+  const [users, setUsers]               = useState<AppUser[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [showModal, setShowModal]       = useState(false);
+  const [editUser, setEditUser]         = useState<AppUser | null>(null);
+  const [form, setForm]                 = useState<UserForm>(defaultForm);
+  const [saving, setSaving]             = useState(false);
+  const [error, setError]               = useState("");
+  const [showPw, setShowPw]             = useState(false);
+  const [successMsg, setSuccessMsg]     = useState("");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const loadUsers = async () => {
     setLoading(true);
@@ -80,48 +72,66 @@ export default function AdminUsersPage() {
   };
 
   const handleSave = async () => {
-    if (!form.name || !form.email) { setError("Nama dan email wajib diisi"); return; }
-    if (!editUser && !form.password) { setError("Password wajib diisi untuk user baru"); return; }
-    if (form.password && form.password.length < 6) { setError("Password minimal 6 karakter"); return; }
+    if (!form.name.trim() || !form.email.trim()) {
+      setError("Nama dan email wajib diisi");
+      return;
+    }
+    if (!editUser && !form.password) {
+      setError("Password wajib diisi untuk user baru");
+      return;
+    }
+    if (form.password && form.password.length < 6) {
+      setError("Password minimal 6 karakter");
+      return;
+    }
     if (!appUser) return;
 
     setSaving(true);
     setError("");
+
     try {
       if (editUser) {
-        // Update existing
-        await updateUser(editUser.uid, { name: form.name, role: form.role });
+        // ── Edit mode ─────────────────────────────────────────────────────
+        await updateUser(editUser.uid, { name: form.name.trim(), role: form.role });
         if (form.password) {
-          // Note: updating another user's password requires Admin SDK.
-          // For simplicity, we send a reset email instead.
           await sendPasswordResetEmail(auth, editUser.email);
-          setResetEmailSent(editUser.email);
+          setSuccessMsg(`Email reset password dikirim ke ${editUser.email}`);
         }
-        await addAuditLog(appUser.uid, appUser.name, "UPDATE_USER", `Update user: ${form.email}`);
+        await addAuditLog(
+          appUser.uid,
+          appUser.name,
+          "UPDATE_USER",
+          `Update user: ${editUser.email} → role: ${form.role}`
+        );
       } else {
-        // Create new Firebase Auth user
-        // Note: createUserWithEmailAndPassword signs in the NEW user.
-        // In production, use Firebase Admin SDK via an API route to avoid this.
-        // For now we use a workaround: create user, then immediately sign back.
-        const adminEmail = appUser.email;
-        const cred = await createUserWithEmailAndPassword(auth, form.email, form.password);
-        await createUserDoc(cred.user.uid, {
-          name: form.name,
-          email: form.email,
-          role: form.role,
-          active: true,
-          createdBy: appUser.uid,
+        // ── Create mode: gunakan API route (Admin SDK, tidak ubah sesi) ───
+        const res = await fetch("/api/admin/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name:      form.name.trim(),
+            email:     form.email.trim(),
+            password:  form.password,
+            role:      form.role,
+            createdBy: appUser.uid,
+          }),
         });
-        await addAuditLog(appUser.uid, appUser.name, "CREATE_USER", `Buat user: ${form.email}`);
-        // Sign admin back in
-        // (In production use Admin SDK API route — see SETUP_GUIDE.md)
-        alert("User berhasil dibuat. PENTING: Anda harus login kembali sebagai admin karena Firebase memindahkan sesi ke user baru. Gunakan fitur Create User via API untuk production.");
+
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "Gagal membuat user");
+          setSaving(false);
+          return;
+        }
+
+        setSuccessMsg(`User ${form.email} berhasil dibuat!`);
       }
+
       setShowModal(false);
-      loadUsers();
+      // Reload list setelah create/update
+      await loadUsers();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg.includes("email-already-in-use") ? "Email sudah terdaftar" : msg);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -129,6 +139,7 @@ export default function AdminUsersPage() {
 
   const handleToggleActive = async (u: AppUser) => {
     if (!appUser) return;
+    setActionLoading(u.uid);
     await toggleUserActive(u.uid, !u.active);
     await addAuditLog(
       appUser.uid,
@@ -136,7 +147,8 @@ export default function AdminUsersPage() {
       u.active ? "DEACTIVATE_USER" : "ACTIVATE_USER",
       `${u.active ? "Nonaktifkan" : "Aktifkan"} user: ${u.email}`
     );
-    loadUsers();
+    await loadUsers();
+    setActionLoading(null);
   };
 
   return (
@@ -154,10 +166,25 @@ export default function AdminUsersPage() {
           </button>
         </div>
 
+        {/* Success message */}
+        {successMsg && (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-sm text-green-800 flex items-center justify-between">
+            <span>{successMsg}</span>
+            <button onClick={() => setSuccessMsg("")} className="text-green-600 hover:text-green-800">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         <div className="card overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="w-6 h-6 animate-spin text-green-600" />
+            </div>
+          ) : users.length === 0 ? (
+            <div className="text-center py-12 text-slate-400">
+              <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">Belum ada user terdaftar</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -179,7 +206,7 @@ export default function AdminUsersPage() {
                           <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-700 font-semibold text-sm flex-shrink-0">
                             {u.name.charAt(0).toUpperCase()}
                           </div>
-                          {u.name}
+                          <span>{u.name}</span>
                           {u.uid === appUser?.uid && (
                             <span className="badge-info text-xs">Anda</span>
                           )}
@@ -187,9 +214,7 @@ export default function AdminUsersPage() {
                       </td>
                       <td className="px-4 py-3 text-slate-600">{u.email}</td>
                       <td className="px-4 py-3">
-                        <span className={cn(
-                          u.role === "admin" ? "badge-warning" : "badge-success"
-                        )}>
+                        <span className={u.role === "admin" ? "badge-warning" : "badge-success"}>
                           {u.role === "admin" ? "Admin" : "Operator"}
                         </span>
                       </td>
@@ -203,22 +228,29 @@ export default function AdminUsersPage() {
                           <button
                             onClick={() => openEdit(u)}
                             className="btn-ghost px-2.5 py-1.5 text-xs"
+                            title="Edit user"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
                           {u.uid !== appUser?.uid && (
-                            <button
-                              onClick={() => handleToggleActive(u)}
-                              className={cn(
-                                "btn-ghost px-2.5 py-1.5 text-xs",
-                                u.active ? "text-red-500 hover:bg-red-50" : "text-green-600 hover:bg-green-50"
-                              )}
-                            >
-                              {u.active
-                                ? <><UserX className="w-3.5 h-3.5" /> Nonaktifkan</>
-                                : <><UserCheck className="w-3.5 h-3.5" /> Aktifkan</>
-                              }
-                            </button>
+                            actionLoading === u.uid ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                            ) : (
+                              <button
+                                onClick={() => handleToggleActive(u)}
+                                className={cn(
+                                  "btn-ghost px-2.5 py-1.5 text-xs",
+                                  u.active
+                                    ? "text-red-500 hover:bg-red-50"
+                                    : "text-green-600 hover:bg-green-50"
+                                )}
+                              >
+                                {u.active
+                                  ? <><UserX className="w-3.5 h-3.5" /> Nonaktifkan</>
+                                  : <><UserCheck className="w-3.5 h-3.5" /> Aktifkan</>
+                                }
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -229,12 +261,6 @@ export default function AdminUsersPage() {
             </div>
           )}
         </div>
-
-        {resetEmailSent && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800">
-            Email reset password telah dikirim ke <strong>{resetEmailSent}</strong>
-          </div>
-        )}
 
         {/* Modal */}
         {showModal && (
@@ -248,19 +274,26 @@ export default function AdminUsersPage() {
                   <X className="w-4 h-4" />
                 </button>
               </div>
+
               <div className="p-6 space-y-4">
                 <div>
-                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">Nama Lengkap</label>
+                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">
+                    Nama Lengkap
+                  </label>
                   <input
                     type="text"
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
                     className="input-field"
                     placeholder="Nama lengkap"
+                    autoFocus
                   />
                 </div>
+
                 <div>
-                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">Email</label>
+                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">
+                    Email
+                  </label>
                   <input
                     type="email"
                     value={form.email}
@@ -269,10 +302,14 @@ export default function AdminUsersPage() {
                     placeholder="email@perusahaan.com"
                     disabled={!!editUser}
                   />
+                  {editUser && (
+                    <p className="text-xs text-slate-400 mt-1">Email tidak bisa diubah</p>
+                  )}
                 </div>
+
                 <div>
                   <label className="text-sm font-medium text-slate-700 mb-1.5 block">
-                    {editUser ? "Password Baru (kosongkan jika tidak diubah)" : "Password"}
+                    {editUser ? "Password Baru (opsional)" : "Password"}
                   </label>
                   <div className="relative">
                     <input
@@ -282,39 +319,51 @@ export default function AdminUsersPage() {
                       className="input-field pr-10"
                       placeholder={editUser ? "Kosongkan jika tidak diubah" : "Min. 6 karakter"}
                     />
-                    <button type="button" onClick={() => setShowPw(!showPw)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                    <button
+                      type="button"
+                      onClick={() => setShowPw(!showPw)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    >
                       {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
                   {editUser && (
                     <p className="text-xs text-slate-400 mt-1">
-                      Jika diisi, akan mengirimkan email reset password ke user.
+                      Jika diisi, email reset password akan dikirim ke user.
                     </p>
                   )}
                 </div>
+
                 <div>
-                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">Role</label>
+                  <label className="text-sm font-medium text-slate-700 mb-1.5 block">
+                    Role
+                  </label>
                   <select
                     value={form.role}
                     onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
                     className="input-field"
                   >
-                    <option value="operator">Operator (Scan saja)</option>
-                    <option value="admin">Admin (Full access)</option>
+                    <option value="operator">Operator — hanya bisa scan</option>
+                    <option value="admin">Admin — full access</option>
                   </select>
                 </div>
+
                 {error && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
                     {error}
                   </div>
                 )}
               </div>
+
               <div className="px-6 pb-6 flex justify-end gap-2">
-                <button onClick={() => setShowModal(false)} className="btn-secondary">Batal</button>
+                <button onClick={() => setShowModal(false)} className="btn-secondary">
+                  Batal
+                </button>
                 <button onClick={handleSave} disabled={saving} className="btn-primary">
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  {editUser ? "Simpan Perubahan" : "Buat User"}
+                  {saving
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Menyimpan...</>
+                    : <><Check className="w-4 h-4" /> {editUser ? "Simpan" : "Buat User"}</>
+                  }
                 </button>
               </div>
             </div>
