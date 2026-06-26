@@ -460,95 +460,191 @@ function PrintPageInner() {
 
       {/* Print pages */}
       {!sheetError && (
-        <div className="print-container max-w-5xl mx-auto space-y-8">
+        <div className="print-container max-w-4xl mx-auto space-y-6">
           {pages.map((pageRows, pageIndex) => (
             <div
               key={pageIndex}
-              className={`bg-white border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none ${
+              className={`bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden print:border-none print:rounded-none print:shadow-none ${
                 pageIndex > 0 ? "print:break-before-page" : ""
               }`}
             >
-              {totalPages > 1 && (
-                <div className="bg-slate-800 text-white text-xs px-6 py-2 text-right no-print">
-                  Halaman {pageIndex + 1} dari {totalPages}
-                </div>
-              )}
+              <div style={{ padding: "32px 36px", fontFamily: "Arial, sans-serif" }}>
 
-              <div className="p-8">
-                {/* Header */}
-                <div className="text-center mb-6 border-b-2 border-slate-800 pb-4">
-                  <h1 className="text-xl font-bold text-slate-900 uppercase tracking-wide">
-                    TANDA TERIMA DARI EKSPEDISI {expedisiName.toUpperCase()}
-                  </h1>
-                  <div className="flex flex-wrap justify-center gap-6 mt-3 text-sm text-slate-600">
-                    <span><strong>Tanggal:</strong> {formatDate(printDate)}</span>
-                    <span>
-                      <strong>No. Karung:</strong>{" "}
-                      {karungList.map((k) => k.nomorKarung).join(", ")}
-                    </span>
-                    <span><strong>Total Resi:</strong> {sheetRows.length}</span>
-                    {totalPages > 1 && (
-                      <span className="text-slate-400">
-                        Hal. {pageIndex + 1}/{totalPages}
-                      </span>
-                    )}
+                {/* ── Document Header ── */}
+                {pageIndex === 0 ? (
+                  <>
+                    {/* Top bar: company left, document type right */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "4px" }}>
+                      <div>
+                        <div style={{ fontSize: "18px", fontWeight: "700", color: "#0f172a", letterSpacing: "-0.3px" }}>
+                          {namaPerusahaan}
+                        </div>
+                        <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>
+                          Sistem Manajemen Retur Barang
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: "15px", fontWeight: "700", color: "#0f172a", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                          TANDA TERIMA
+                        </div>
+                        <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>
+                          Barang Retur dari Ekspedisi
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Divider */}
+                    <div style={{ height: "3px", background: "linear-gradient(to right, #0f172a, #334155)", borderRadius: "2px", margin: "12px 0 16px" }} />
+
+                    {/* Info grid */}
+                    <div style={{
+                      display: "grid", gridTemplateColumns: "1fr 1fr",
+                      border: "1px solid #e2e8f0", borderRadius: "6px",
+                      overflow: "hidden", marginBottom: "20px", fontSize: "12px",
+                    }}>
+                      {[
+                        ["Ekspedisi", expedisiName],
+                        ["Tanggal", formatDate(printDate)],
+                        ["No. Karung", karungList.map((k) => k.nomorKarung).join(", ")],
+                        ["Total Resi", `${sheetRows.length} item`],
+                      ].map(([label, value], i) => (
+                        <div key={i} style={{
+                          padding: "8px 14px",
+                          borderRight: i % 2 === 0 ? "1px solid #e2e8f0" : "none",
+                          borderBottom: i < 2 ? "1px solid #e2e8f0" : "none",
+                          backgroundColor: i % 2 === 0 ? "#f8fafc" : "#ffffff",
+                        }}>
+                          <span style={{ color: "#94a3b8", fontSize: "10px", display: "block", marginBottom: "2px" }}>{label}</span>
+                          <span style={{ fontWeight: "600", color: "#0f172a" }}>{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  /* Continuation page — compact header */
+                  <div style={{ marginBottom: "16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                        {namaPerusahaan} — TANDA TERIMA <span style={{ fontWeight: "400", color: "#64748b" }}>(Lanjutan)</span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>
+                        {expedisiName} · {formatDate(printDate)} · Hal. {pageIndex + 1}/{totalPages}
+                      </div>
+                    </div>
+                    <div style={{ height: "2px", background: "#e2e8f0", margin: "10px 0 16px" }} />
                   </div>
-                </div>
+                )}
 
-                {/* Table — columns from G-Sheet: No, Resi, Karung, Operator, Tgl, Jam */}
-                <table className="w-full text-sm border-collapse mb-6">
+                {/* ── Table ── */}
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px", marginBottom: "16px" }}>
                   <thead>
-                    <tr className="bg-slate-800 text-white">
-                      <th className="px-3 py-2.5 text-left border border-slate-600 w-10">No.</th>
-                      <th className="px-3 py-2.5 text-left border border-slate-600">Kode Resi</th>
-                      <th className="px-3 py-2.5 text-left border border-slate-600 w-24">No. Karung</th>
-                      <th className="px-3 py-2.5 text-left border border-slate-600 w-36">Di Scan Oleh</th>
-                      <th className="px-3 py-2.5 text-left border border-slate-600 w-28">Tanggal</th>
-                      <th className="px-3 py-2.5 text-left border border-slate-600 w-20">Jam</th>
+                    <tr style={{ backgroundColor: "#0f172a" }}>
+                      {["No.", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"].map((h, i) => (
+                        <th key={i} style={{
+                          padding: "9px 10px",
+                          color: "#ffffff",
+                          fontWeight: "600",
+                          fontSize: "11px",
+                          border: "1px solid #1e293b",
+                          textAlign: i === 0 || i >= 4 ? "center" : "left",
+                          whiteSpace: "nowrap",
+                          ...(i === 0 ? { width: "36px" } : {}),
+                          ...(i === 2 ? { width: "80px" } : {}),
+                          ...(i === 3 ? { width: "120px" } : {}),
+                          ...(i === 4 ? { width: "90px" } : {}),
+                          ...(i === 5 ? { width: "62px" } : {}),
+                        }}>
+                          {h}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {pageRows.map((row, i) => {
                       const globalNo = pageIndex * ROWS_PER_PAGE + i + 1;
+                      const isEven = i % 2 === 0;
                       return (
-                        <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-slate-50"}>
-                          <td className="px-3 py-2 border border-slate-200 text-slate-500 text-center">{globalNo}</td>
-                          <td className="px-3 py-2 border border-slate-200 font-mono font-medium text-slate-900">{row[1]}</td>
-                          <td className="px-3 py-2 border border-slate-200 text-slate-600">{row[2]}</td>
-                          <td className="px-3 py-2 border border-slate-200 text-slate-600">{row[3]}</td>
-                          <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">{row[4]}</td>
-                          <td className="px-3 py-2 border border-slate-200 text-slate-600 text-xs">{row[5]}</td>
+                        <tr key={i} style={{ backgroundColor: isEven ? "#ffffff" : "#f8fafc" }}>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{globalNo}</td>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "11px" }}>{row[1]}</td>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
+                          <td style={{ padding: "6px 10px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
                         </tr>
                       );
                     })}
                   </tbody>
+                  {/* Total row on last page */}
+                  {pageIndex === totalPages - 1 && (
+                    <tfoot>
+                      <tr style={{ backgroundColor: "#f1f5f9" }}>
+                        <td colSpan={6} style={{ padding: "7px 10px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "11px", color: "#0f172a" }}>
+                          Total Keseluruhan : {sheetRows.length} resi
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
 
-                {/* Footer — last page only */}
+                {/* ── Footer — last page only ── */}
                 {pageIndex === totalPages - 1 && (
                   <>
-                    <div className="border border-slate-300 rounded-lg px-4 py-3 mb-8 bg-amber-50">
-                      <p className="text-xs text-slate-700">
-                        <strong>Note : </strong>{noteTandaTerima}
-                      </p>
+                    {/* Note */}
+                    <div style={{
+                      border: "1px solid #fcd34d",
+                      borderLeft: "4px solid #f59e0b",
+                      borderRadius: "4px",
+                      padding: "10px 14px",
+                      marginBottom: "28px",
+                      backgroundColor: "#fffbeb",
+                      fontSize: "10px",
+                      color: "#78350f",
+                      lineHeight: "1.5",
+                    }}>
+                      <span style={{ fontWeight: "700", color: "#92400e" }}>Keterangan : </span>
+                      {noteTandaTerima}
                     </div>
-                    <div className="grid grid-cols-2 gap-16 mt-4">
-                      <div className="text-center">
-                        <p className="text-sm font-medium text-slate-700 mb-16">Diserahkan Oleh :</p>
-                        <div className="border-t border-slate-400 pt-2">
-                          <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
-                          <p className="text-xs text-slate-500">{expedisiName}</p>
+
+                    {/* Signatures */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "60px" }}>
+                      {[
+                        { label: "Yang Menyerahkan,", sub: expedisiName },
+                        { label: "Yang Menerima,",    sub: namaPerusahaan },
+                      ].map((sig, i) => (
+                        <div key={i} style={{ textAlign: "center" }}>
+                          <div style={{ fontSize: "11px", fontWeight: "600", color: "#334155", marginBottom: "64px" }}>
+                            {sig.label}
+                          </div>
+                          <div style={{ borderTop: "1.5px solid #94a3b8", paddingTop: "8px" }}>
+                            <div style={{ fontSize: "10px", color: "#94a3b8" }}>(Nama &amp; Tanda Tangan)</div>
+                            <div style={{ fontSize: "11px", fontWeight: "600", color: "#334155", marginTop: "3px" }}>{sig.sub}</div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-medium text-slate-700 mb-16">Diterima Oleh :</p>
-                        <div className="border-t border-slate-400 pt-2">
-                          <p className="text-xs text-slate-500">(Nama &amp; Tanda Tangan)</p>
-                          <p className="text-xs text-slate-500">{namaPerusahaan}</p>
-                        </div>
-                      </div>
+                      ))}
+                    </div>
+
+                    {/* Document footer */}
+                    <div style={{
+                      marginTop: "24px",
+                      paddingTop: "10px",
+                      borderTop: "1px solid #e2e8f0",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      fontSize: "9px",
+                      color: "#cbd5e1",
+                    }}>
+                      <span>Dokumen ini dicetak secara otomatis oleh sistem</span>
+                      <span>{namaPerusahaan} · Dicetak: {new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })}</span>
                     </div>
                   </>
+                )}
+
+                {/* Page number (all pages) */}
+                {totalPages > 1 && (
+                  <div style={{ marginTop: "12px", textAlign: "right", fontSize: "9px", color: "#cbd5e1" }}>
+                    Halaman {pageIndex + 1} dari {totalPages}
+                  </div>
                 )}
               </div>
             </div>
@@ -559,9 +655,10 @@ function PrintPageInner() {
       <style>{`
         @media print {
           .no-print { display: none !important; }
-          body { background: white !important; margin: 0; }
-          .print-container { max-width: 100% !important; margin: 0 !important; }
-          @page { margin: 1cm; size: A4; }
+          body { background: white !important; margin: 0; padding: 0; }
+          .print-container { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+          .print-container > div { box-shadow: none !important; border: none !important; border-radius: 0 !important; margin: 0 !important; }
+          @page { margin: 1.2cm 1.5cm; size: A4 portrait; }
         }
       `}</style>
     </>
