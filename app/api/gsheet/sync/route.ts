@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
-import { sheetTabName, sheetDateName, formatTime } from "@/lib/utils";
+import { sheetTabName, sheetDateName } from "@/lib/utils";
 
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
 
@@ -153,7 +153,8 @@ export async function POST(req: NextRequest) {
 
     const rowNo = await getNextRowNumber(sheets, spreadsheetId, sheetName);
     const scanDate = sheetDateName(date);
-    const scanTime = formatTime(new Date(scannedAt));
+    // scannedAt sudah berupa "HH:mm:ss" (diformat di client = timezone lokal user/WIB)
+    const scanTime = scannedAt;
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,

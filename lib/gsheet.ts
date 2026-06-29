@@ -8,7 +8,7 @@ export interface SyncPayload {
   expedisiName: string;
   expedisiCode: string;
   scannedByName: string;
-  scannedAt: string;   // ISO string
+  scannedAt: string;   // "HH:mm:ss" — diformat di client agar timezone lokal (WIB), bukan UTC
   date: string;        // YYYY-MM-DD
   spreadsheetId: string;
 }

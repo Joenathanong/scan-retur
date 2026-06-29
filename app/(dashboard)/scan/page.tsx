@@ -17,7 +17,7 @@ import {
 } from "@/lib/firestore";
 import { syncToSheet } from "@/lib/gsheet";
 import { playSuccess, playFailed } from "@/lib/audio";
-import { todayString, formatDateTime, cn } from "@/lib/utils";
+import { todayString, formatDateTime, formatTime, cn } from "@/lib/utils";
 import { Timestamp, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { Expedisi, Karung, ScanRecord, CompanySettings } from "@/types";
@@ -101,13 +101,14 @@ export default function ScanPage() {
   const [duplicateInfo, setDuplicateInfo] = useState("");
   const [settings, setSettings] = useState<CompanySettings | null>(null);
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  const feedbackTimer = useRef<NodeJS.Timeout | null>(null);
-  // Lock sinkron untuk mencegah race condition double-scan:
-  // `processing` state React bersifat async (batch update), sehingga dua Enter
-  // yang datang sangat cepat bisa lolos sebelum state sempat berubah.
-  // `processingRef` diupdate secara sinkron sehingga lock langsung berlaku.
-  const processingRef = useRef(false);
+  const inputRef       = useRef<HTMLInputElement>(null);
+  const feedbackTimer  = useRef<NodeJS.Timeout | null>(null);
+  // Lock sinkron — cegah race condition double-scan
+  const processingRef  = useRef(false);
+  // Buffer karakter scanner — di luar useEffect agar tidak di-reset saat re-render
+  const scanBufferRef  = useRef("");
+  // Ref ke handleScan terbaru — listener tidak perlu re-register saat state berubah
+  const handleScanRef  = useRef<(v: string) => void>(() => {});
 
   const today = todayString();
 
@@ -237,7 +238,7 @@ export default function ScanPage() {
             expedisiName: selectedExpedisi!.name,
             expedisiCode: selectedExpedisi!.code,
             scannedByName: appUser.name,
-            scannedAt: now.toISOString(),
+            scannedAt: formatTime(now), // format di client (timezone lokal user = WIB)
             date: today,
             spreadsheetId: settings.spreadsheetId,
           });
@@ -266,27 +267,31 @@ export default function ScanPage() {
     ]
   );
 
+  // ── Selalu update handleScanRef ke versi terbaru ────────────────────────
+  // Listener (di bawah) referensi ref ini sehingga tidak perlu re-register
+  // setiap kali handleScan berubah karena state update.
+  useEffect(() => { handleScanRef.current = handleScan; }, [handleScan]);
+
   // ── Global barcode scanner listener ─────────────────────────────────────
   //
-  // MENGAPA document-level listener, bukan onKeyDown di input:
+  // MENGAPA document-level listener + useRef buffer:
   //
-  // React controlled input (`value={state}`) menyebabkan re-render yang menimpa
-  // DOM value. Jika scanner mengetik "SP" lalu React re-render terjadi (setelah
-  // scan sebelumnya selesai), React reset value ke "" sehingga "SP" HILANG.
-  // Hasilnya: resi yang muncul adalah "XID..." atau "ID..." (missing prefix).
+  // 1. React controlled input (value={state}) → setiap re-render menimpa DOM value.
+  //    Scanner ketik "SP" → React re-render → DOM di-reset → "SP" hilang.
+  //    Hasilnya: "XID...", "D06...", "6144..." (prefix terpotong).
   //
-  // Solusi: tangkap semua keydown di document (capture phase = sebelum elemen
-  // manapun menerimanya), akumulasi di memory buffer (ref), bukan di DOM.
-  // React re-render tidak bisa menyentuh buffer ini.
+  // 2. buf sebagai local var di useEffect → ikut di-reset setiap effect re-run
+  //    (terjadi saat handleScan berubah karena state update).
+  //
+  // Solusi: scanBufferRef (useRef) di luar effect → tidak pernah di-reset oleh
+  // React. handleScanRef selalu menunjuk ke handleScan terbaru tanpa harus
+  // re-register listener.
   //
   useEffect(() => {
     if (step !== "scanning") return;
 
-    // Buffer di memory — tidak terpengaruh React re-render
-    const buf = { chars: "" };
-
     const onKey = (e: KeyboardEvent) => {
-      // Jangan interfere input lain (mis. field nomor karung, ekspedisi baru)
+      // Jangan interfere dengan input lain (mis. form tambah karung, tambah expedisi)
       const target = e.target as HTMLElement;
       const isOtherInput =
         (target.tagName === "INPUT" ||
@@ -298,46 +303,49 @@ export default function ScanPage() {
       if (e.key === "Enter") {
         e.preventDefault();
 
-        const captured = buf.chars.trim();
-        buf.chars = "";
-        // Bersihkan tampilan input
+        const captured = scanBufferRef.current.trim();
+        scanBufferRef.current = "";
         if (inputRef.current) inputRef.current.value = "";
 
+        // Jika sedang processing, buang scan ini (user harus scan ulang)
         if (!captured || processingRef.current) return;
         processingRef.current = true;
 
-        // Delay 30ms — memberi waktu karakter akhir barcode ini untuk tiba,
-        // tapi jauh lebih pendek dari 50ms sebelumnya.
+        // 30ms: beri waktu char akhir barcode tiba, sambil cegah char awal
+        // barcode berikutnya masuk (lebih pendek dari 50ms sebelumnya).
         setTimeout(() => {
           const cleaned = cleanResi(captured);
           if (cleaned) {
-            handleScan(cleaned);
+            handleScanRef.current(cleaned);
           } else {
             processingRef.current = false;
           }
         }, 30);
 
       } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // Karakter printable — akumulasi ke buffer
-        // preventDefault di capture phase agar char tidak juga masuk ke DOM input
-        // secara native (yang bisa di-wipe React), kita update manual di bawah.
+        // Char printable — simpan ke buffer ref, update tampilan manual
+        // preventDefault di capture phase: cegah browser juga menulis ke DOM input
+        // secara native (yang bisa di-wipe oleh React re-render berikutnya).
         e.preventDefault();
-        buf.chars += e.key;
-        // Update tampilan input secara manual (bypass React state)
-        if (inputRef.current) inputRef.current.value = buf.chars;
+        scanBufferRef.current += e.key;
+        if (inputRef.current) inputRef.current.value = scanBufferRef.current;
 
       } else if (e.key === "Backspace") {
         e.preventDefault();
-        buf.chars = buf.chars.slice(0, -1);
-        if (inputRef.current) inputRef.current.value = buf.chars;
+        scanBufferRef.current = scanBufferRef.current.slice(0, -1);
+        if (inputRef.current) inputRef.current.value = scanBufferRef.current;
       }
     };
 
-    // { capture: true } — listener ini jalan SEBELUM event sampai ke elemen target,
-    // sehingga preventDefault bisa mencegah browser menulis char ke input secara native.
+    // capture: true → listener jalan SEBELUM event sampai ke elemen manapun,
+    // sehingga preventDefault efektif mencegah browser menulis char ke input.
     document.addEventListener("keydown", onKey, { capture: true });
-    return () => document.removeEventListener("keydown", onKey, { capture: true });
-  }, [step, handleScan]);
+    return () => {
+      document.removeEventListener("keydown", onKey, { capture: true });
+      // Bersihkan buffer saat keluar dari mode scanning
+      scanBufferRef.current = "";
+    };
+  }, [step]); // hanya step — handleScan diakses via handleScanRef (selalu fresh)
 
   // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
   const handleAddExpedisi = async () => {
