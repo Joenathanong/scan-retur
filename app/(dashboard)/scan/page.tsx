@@ -266,44 +266,78 @@ export default function ScanPage() {
     ]
   );
 
-  // PDT / barcode gun — tangkap nilai SAAT Enter ditekan (T=0),
-  // bukan setelah 50ms. Setelah 50ms, scanner sudah bisa mulai mengetik
-  // barcode BERIKUTNYA sehingga terjadi kontaminasi (misal "JX9730214994JX").
-  // Input langsung di-clear agar karakter barcode berikutnya tidak tersisa.
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+  // ── Global barcode scanner listener ─────────────────────────────────────
+  //
+  // MENGAPA document-level listener, bukan onKeyDown di input:
+  //
+  // React controlled input (`value={state}`) menyebabkan re-render yang menimpa
+  // DOM value. Jika scanner mengetik "SP" lalu React re-render terjadi (setelah
+  // scan sebelumnya selesai), React reset value ke "" sehingga "SP" HILANG.
+  // Hasilnya: resi yang muncul adalah "XID..." atau "ID..." (missing prefix).
+  //
+  // Solusi: tangkap semua keydown di document (capture phase = sebelum elemen
+  // manapun menerimanya), akumulasi di memory buffer (ref), bukan di DOM.
+  // React re-render tidak bisa menyentuh buffer ini.
+  //
+  useEffect(() => {
+    if (step !== "scanning") return;
+
+    // Buffer di memory — tidak terpengaruh React re-render
+    const buf = { chars: "" };
+
+    const onKey = (e: KeyboardEvent) => {
+      // Jangan interfere input lain (mis. field nomor karung, ekspedisi baru)
+      const target = e.target as HTMLElement;
+      const isOtherInput =
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT") &&
+        target !== inputRef.current;
+      if (isOtherInput) return;
+
       if (e.key === "Enter") {
         e.preventDefault();
 
-        // Gunakan processingRef (sinkron) bukan state `processing` (async).
-        // Ini mencegah race condition: dua Enter cepat keduanya lolos sebelum
-        // React sempat memperbarui state.
-        if (processingRef.current) return;
-        processingRef.current = true; // kunci sinkron sekarang juga
-
-        // Tangkap nilai dari DOM sekarang — paling akurat untuk HID scanner
-        const captured = (inputRef.current?.value ?? "").trim();
-
-        // Segera bersihkan input supaya scan berikutnya mulai dari kosong
+        const captured = buf.chars.trim();
+        buf.chars = "";
+        // Bersihkan tampilan input
         if (inputRef.current) inputRef.current.value = "";
-        setScanInput("");
 
-        // Delay pendek (30ms) untuk karakter akhir barcode ini yang masih
-        // dalam perjalanan, tapi jauh lebih singkat dari sebelumnya agar
-        // tidak menangkap karakter dari barcode berikutnya.
+        if (!captured || processingRef.current) return;
+        processingRef.current = true;
+
+        // Delay 30ms — memberi waktu karakter akhir barcode ini untuk tiba,
+        // tapi jauh lebih pendek dari 50ms sebelumnya.
         setTimeout(() => {
           const cleaned = cleanResi(captured);
           if (cleaned) {
             handleScan(cleaned);
           } else {
-            // Tidak ada yang di-scan — lepas kunci
             processingRef.current = false;
           }
         }, 30);
+
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Karakter printable — akumulasi ke buffer
+        // preventDefault di capture phase agar char tidak juga masuk ke DOM input
+        // secara native (yang bisa di-wipe React), kita update manual di bawah.
+        e.preventDefault();
+        buf.chars += e.key;
+        // Update tampilan input secara manual (bypass React state)
+        if (inputRef.current) inputRef.current.value = buf.chars;
+
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        buf.chars = buf.chars.slice(0, -1);
+        if (inputRef.current) inputRef.current.value = buf.chars;
       }
-    },
-    [handleScan]
-  );
+    };
+
+    // { capture: true } — listener ini jalan SEBELUM event sampai ke elemen target,
+    // sehingga preventDefault bisa mencegah browser menulis char ke input secara native.
+    document.addEventListener("keydown", onKey, { capture: true });
+    return () => document.removeEventListener("keydown", onKey, { capture: true });
+  }, [step, handleScan]);
 
   // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
   const handleAddExpedisi = async () => {
@@ -668,9 +702,10 @@ export default function ScanPage() {
             <input
               ref={inputRef}
               type="text"
-              value={scanInput}
-              onChange={(e) => setScanInput(e.target.value)}
-              onKeyDown={handleKeyDown}
+              // Uncontrolled — dikelola oleh document keydown listener di atas.
+              // Tidak pakai value={} agar React re-render tidak menimpa chars
+              // yang sudah masuk dari scanner.
+              defaultValue=""
               disabled={processing || isKarungLocked(selectedKarung!)}
               className={cn(
                 "w-full px-4 py-5 rounded-xl border-2 text-2xl font-mono tracking-widest",
