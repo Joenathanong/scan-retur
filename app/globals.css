@@ -81,8 +81,8 @@
 
 /* Print styles */
 @page {
-  size: 215mm 330mm; /* Kertas F4 */
-  margin: 1.4cm 1.8cm;
+  size: 210mm 297mm; /* Kertas A4 */
+  margin: 1.4cm 1.8cm 2cm 1.8cm;
 }
 
 @media print {

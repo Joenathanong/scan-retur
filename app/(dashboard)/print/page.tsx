@@ -27,20 +27,20 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-// ── Single-column constants (F4, margin 1.4cm 1.8cm, font 10px, row padding 3px) ──
-const SC_ONLY   = 25; // 1 halaman: big header + rows + footer
-const SC_FIRST  = 36; // halaman pertama multi-page: big header, tanpa footer
-const SC_MIDDLE = 44; // halaman tengah: compact header, tanpa footer
-const SC_LAST   = 28; // halaman terakhir: compact header + footer
+// ── Single-column constants (A4, margin 1.4cm 1.8cm 2cm, font 10px, row padding 3px) ──
+const SC_ONLY   = 22; // 1 halaman: big header + rows + footer
+const SC_FIRST  = 30; // halaman pertama multi-page: big header, tanpa footer
+const SC_MIDDLE = 38; // halaman tengah: compact header, tanpa footer
+const SC_LAST   = 22; // halaman terakhir: compact header + footer
 
 // ── Two-column constants (rows PER COLUMN per physical page) ──
-// Font 9px, padding 2px → ~15px per row. F4 usable height ~1145px.
-// First page  (big header ~80px + table head ~18px)         : (1145-98)/15 ≈ 70 → use 50
-// Middle page (compact header ~35px + table head ~18px)     : (1145-53)/15 ≈ 73 → use 58
-// Last page   (compact header ~35px + head + footer ~170px) : (1145-223)/15 ≈ 61 → use 46
-const TC_FIRST  = 50; // rows per column, halaman pertama
-const TC_MIDDLE = 58; // rows per column, halaman tengah
-const TC_LAST   = 46; // rows per column, halaman terakhir
+// Font 9px, padding 2px → ~14-15px per row. A4 usable height ~1017px.
+// First page  (big header ~165px + table head ~18px)         : (1017-183)/14.5 ≈ 58 → use 44
+// Middle page (compact header ~45px + table head ~18px)      : (1017-63)/14.5  ≈ 66 → use 48
+// Last page   (compact header ~45px + head + footer ~180px)  : (1017-243)/14.5 ≈ 53 → use 36
+const TC_FIRST  = 44; // rows per column, halaman pertama
+const TC_MIDDLE = 48; // rows per column, halaman tengah
+const TC_LAST   = 36; // rows per column, halaman terakhir
 
 // Threshold: pakai 1 kolom jika seluruh data muat di 1 halaman
 const SC_THRESHOLD = SC_ONLY;
@@ -802,8 +802,8 @@ function PrintPageInner() {
             padding: 0 !important;
           }
           @page {
-            size: 215mm 330mm portrait;
-            margin: 1.4cm 1.8cm;
+            size: 210mm 297mm portrait;
+            margin: 1.4cm 1.8cm 2cm 1.8cm;
           }
         }
       `}</style>
