@@ -39,10 +39,10 @@ import {
 type Step = "select-expedisi" | "select-karung" | "scanning";
 type ScanFeedback = "idle" | "success" | "failed" | "duplicate";
 
-/** Resi kurang dari ini dianggap partial scan (barcode tidak terbaca sempurna).
- *  10 karakter cukup untuk menangkap kasus seperti "740-RET" (7 char) atau
- *  scan singkat lainnya, sekaligus membiarkan format resi normal (JNT=12, GTL=14, dll). */
-const MIN_RESI_LENGTH = 10;
+/** Resi lebih pendek dari ini akan ditampilkan peringatan tapi TETAP diproses.
+ *  Tidak di-reject keras karena panjang resi bervariasi per kurir.
+ *  Nilai ini hanya untuk deteksi potensi partial scan. */
+const WARN_RESI_LENGTH = 8;
 
 /**
  * Bersihkan hasil scan dari kontaminasi scanner HID:
@@ -178,16 +178,10 @@ export default function ScanPage() {
         return;
       }
 
-      // Tolak partial scan — barcode tidak terbaca sempurna
-      if (resi.length < MIN_RESI_LENGTH) {
-        setFeedback("failed");
-        setLastResi(`SCAN TIDAK LENGKAP (${resi.length} karakter — min ${MIN_RESI_LENGTH})`);
-        await playFailed();
-        resetFeedback();
-        processingRef.current = false;
-        setProcessing(false);
-        return;
-      }
+      // Peringatan jika resi sangat pendek (potensi partial scan),
+      // tapi TIDAK ditolak — operator yang memutuskan apakah ini valid.
+      // Resi yang terlalu pendek tapi valid (mis. kurir tertentu) tetap bisa masuk.
+      const isPotentialPartial = resi.length < WARN_RESI_LENGTH;
 
       // Check if karung is locked
       if (isKarungLocked(selectedKarung)) {
@@ -231,7 +225,7 @@ export default function ScanPage() {
 
         const saved = await addScanRecord(scan);
         setFeedback("success");
-        setLastResi(resi);
+        setLastResi(isPotentialPartial ? `⚠️ ${resi} (${resi.length} karakter — cek ulang)` : resi);
         await playSuccess();
 
         // Sync to Google Sheets in background
