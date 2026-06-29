@@ -17,7 +17,7 @@ import {
 } from "@/lib/firestore";
 import { syncToSheet } from "@/lib/gsheet";
 import { playSuccess, playFailed } from "@/lib/audio";
-import { todayString, formatDateTime, formatTime, cn } from "@/lib/utils";
+import { todayString, formatDateTime, formatTime, sheetTabName, cn } from "@/lib/utils";
 import { Timestamp, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import type { Expedisi, Karung, ScanRecord, CompanySettings } from "@/types";
@@ -45,15 +45,19 @@ type ScanFeedback = "idle" | "success" | "failed" | "duplicate";
 const WARN_RESI_LENGTH = 8;
 
 /**
- * Bersihkan hasil scan dari kontaminasi scanner HID:
+ * Bersihkan hasil scan dari kontaminasi scanner HID / mobile IME:
  *
- * Kasus utama — repeated-prefix suffix:
- *   "JX9730214994JX" → prefix "JX" muncul lagi di pos 12 → trim → "JX9730214994"
- *   Terjadi karena scanner sudah mulai mengetik barcode berikutnya sebelum
- *   Enter dari barcode sebelumnya selesai diproses.
+ * 1. Strip karakter non-alphanumeric di awal & akhir
+ *    "'063454067936" → "063454067936"   (apostrophe dari mobile IME / GS1 FNC1)
+ *    "SPXID063454067936" → tidak berubah
+ *
+ * 2. Repeated-prefix suffix (scanner HID desktop):
+ *    "JX9730214994JX" → "JX9730214994"  (prefix "JX" muncul lagi di pos 12)
+ *    Terjadi karena scanner mulai mengetik barcode berikutnya sebelum Enter selesai.
  */
 function cleanResi(raw: string): string {
-  const s = raw.toUpperCase().trim();
+  // Hapus non-alphanumeric di awal dan akhir (artefak scanner / mobile IME)
+  let s = raw.toUpperCase().trim().replace(/^[^A-Z0-9]+/, "").replace(/[^A-Z0-9]+$/, "");
   if (s.length < 4) return s;
 
   // Deteksi prefix 2-huruf yang muncul lagi setelah minimal 6 karakter
@@ -92,7 +96,6 @@ export default function ScanPage() {
   const [creatingKarung, setCreatingKarung] = useState(false);
 
   // ── Scan ─────────────────────────────────────────────────────────────────
-  const [scanInput, setScanInput] = useState("");
   const [feedback, setFeedback] = useState<ScanFeedback>("idle");
   const [lastResi, setLastResi] = useState("");
   const [recentScans, setRecentScans] = useState<ScanRecord[]>([]);
@@ -105,10 +108,6 @@ export default function ScanPage() {
   const feedbackTimer  = useRef<NodeJS.Timeout | null>(null);
   // Lock sinkron — cegah race condition double-scan
   const processingRef  = useRef(false);
-  // Buffer karakter scanner — di luar useEffect agar tidak di-reset saat re-render
-  const scanBufferRef  = useRef("");
-  // Ref ke handleScan terbaru — listener tidak perlu re-register saat state berubah
-  const handleScanRef  = useRef<(v: string) => void>(() => {});
 
   const today = todayString();
 
@@ -162,7 +161,6 @@ export default function ScanPage() {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => {
       setFeedback("idle");
-      setScanInput("");
       setDuplicateInfo("");
       inputRef.current?.focus();
     }, 1500);
@@ -201,12 +199,35 @@ export default function ScanPage() {
         const { isDuplicate, karungInfo } = await checkDuplicateResi(selectedKarung.id, resi);
 
         if (isDuplicate) {
-          setFeedback("duplicate");
-          setLastResi(resi);
-          setDuplicateInfo(karungInfo ?? "");
-          await playFailed();
-          resetFeedback();
-          return;
+          // G-Sheet adalah sumber kebenaran untuk duplikat.
+          // Jika Firestore bilang duplikat tapi resi TIDAK ada di G-Sheet
+          // (sync sebelumnya gagal), izinkan scan ulang agar data masuk G-Sheet.
+          let blockedByGSheet = true; // default: block jika G-Sheet tidak dikonfigurasi
+
+          if (settings?.spreadsheetId && selectedExpedisi) {
+            try {
+              const tabName = sheetTabName(selectedExpedisi.code, today);
+              const checkRes = await fetch(
+                `/api/gsheet/check-resi?spreadsheetId=${encodeURIComponent(settings.spreadsheetId)}&sheetName=${encodeURIComponent(tabName)}&noResi=${encodeURIComponent(resi)}`
+              );
+              if (checkRes.ok) {
+                const checkData = await checkRes.json();
+                blockedByGSheet = checkData.exists === true;
+              }
+            } catch {
+              // G-Sheet tidak bisa dicek → pakai Firestore sebagai fallback (aman)
+            }
+          }
+
+          if (blockedByGSheet) {
+            setFeedback("duplicate");
+            setLastResi(resi);
+            setDuplicateInfo(karungInfo ?? "");
+            await playFailed();
+            resetFeedback();
+            return;
+          }
+          // else: ada di Firestore tapi tidak di G-Sheet → lanjutkan scan
         }
 
         const now = new Date();
@@ -267,85 +288,7 @@ export default function ScanPage() {
     ]
   );
 
-  // ── Selalu update handleScanRef ke versi terbaru ────────────────────────
-  // Listener (di bawah) referensi ref ini sehingga tidak perlu re-register
-  // setiap kali handleScan berubah karena state update.
-  useEffect(() => { handleScanRef.current = handleScan; }, [handleScan]);
-
-  // ── Global barcode scanner listener ─────────────────────────────────────
-  //
-  // MENGAPA document-level listener + useRef buffer:
-  //
-  // 1. React controlled input (value={state}) → setiap re-render menimpa DOM value.
-  //    Scanner ketik "SP" → React re-render → DOM di-reset → "SP" hilang.
-  //    Hasilnya: "XID...", "D06...", "6144..." (prefix terpotong).
-  //
-  // 2. buf sebagai local var di useEffect → ikut di-reset setiap effect re-run
-  //    (terjadi saat handleScan berubah karena state update).
-  //
-  // Solusi: scanBufferRef (useRef) di luar effect → tidak pernah di-reset oleh
-  // React. handleScanRef selalu menunjuk ke handleScan terbaru tanpa harus
-  // re-register listener.
-  //
-  useEffect(() => {
-    if (step !== "scanning") return;
-
-    const onKey = (e: KeyboardEvent) => {
-      // Jangan interfere dengan input lain (mis. form tambah karung, tambah expedisi)
-      const target = e.target as HTMLElement;
-      const isOtherInput =
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT") &&
-        target !== inputRef.current;
-      if (isOtherInput) return;
-
-      if (e.key === "Enter") {
-        e.preventDefault();
-
-        const captured = scanBufferRef.current.trim();
-        scanBufferRef.current = "";
-        if (inputRef.current) inputRef.current.value = "";
-
-        // Jika sedang processing, buang scan ini (user harus scan ulang)
-        if (!captured || processingRef.current) return;
-        processingRef.current = true;
-
-        // 30ms: beri waktu char akhir barcode tiba, sambil cegah char awal
-        // barcode berikutnya masuk (lebih pendek dari 50ms sebelumnya).
-        setTimeout(() => {
-          const cleaned = cleanResi(captured);
-          if (cleaned) {
-            handleScanRef.current(cleaned);
-          } else {
-            processingRef.current = false;
-          }
-        }, 30);
-
-      } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // Char printable — simpan ke buffer ref, update tampilan manual
-        // preventDefault di capture phase: cegah browser juga menulis ke DOM input
-        // secara native (yang bisa di-wipe oleh React re-render berikutnya).
-        e.preventDefault();
-        scanBufferRef.current += e.key;
-        if (inputRef.current) inputRef.current.value = scanBufferRef.current;
-
-      } else if (e.key === "Backspace") {
-        e.preventDefault();
-        scanBufferRef.current = scanBufferRef.current.slice(0, -1);
-        if (inputRef.current) inputRef.current.value = scanBufferRef.current;
-      }
-    };
-
-    // capture: true → listener jalan SEBELUM event sampai ke elemen manapun,
-    // sehingga preventDefault efektif mencegah browser menulis char ke input.
-    document.addEventListener("keydown", onKey, { capture: true });
-    return () => {
-      document.removeEventListener("keydown", onKey, { capture: true });
-      // Bersihkan buffer saat keluar dari mode scanning
-      scanBufferRef.current = "";
-    };
-  }, [step]); // hanya step — handleScan diakses via handleScanRef (selalu fresh)
+  // handleScan dipanggil langsung dari onKeyDown pada input — tidak perlu ref/effect.
 
   // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
   const handleAddExpedisi = async () => {
@@ -710,10 +653,21 @@ export default function ScanPage() {
             <input
               ref={inputRef}
               type="text"
-              // Uncontrolled — dikelola oleh document keydown listener di atas.
-              // Tidak pakai value={} agar React re-render tidak menimpa chars
-              // yang sudah masuk dari scanner.
+              // Uncontrolled: tidak pakai value={} sehingga React TIDAK pernah
+              // menimpa DOM value saat re-render. Karakter scanner terakumulasi
+              // secara natural di DOM. onKeyDown membaca nilai saat Enter diterima.
               defaultValue=""
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                const val = (inputRef.current?.value ?? "").trim();
+                if (inputRef.current) inputRef.current.value = "";
+                if (!val || processingRef.current) return;
+                processingRef.current = true;
+                const cleaned = cleanResi(val);
+                if (cleaned) handleScan(cleaned);
+                else processingRef.current = false;
+              }}
               disabled={processing || isKarungLocked(selectedKarung!)}
               className={cn(
                 "w-full px-4 py-5 rounded-xl border-2 text-2xl font-mono tracking-widest",
