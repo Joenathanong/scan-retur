@@ -39,8 +39,10 @@ import {
 type Step = "select-expedisi" | "select-karung" | "scanning";
 type ScanFeedback = "idle" | "success" | "failed" | "duplicate";
 
-/** Resi kurang dari ini dianggap partial scan (barcode tidak terbaca sempurna). */
-const MIN_RESI_LENGTH = 6;
+/** Resi kurang dari ini dianggap partial scan (barcode tidak terbaca sempurna).
+ *  10 karakter cukup untuk menangkap kasus seperti "740-RET" (7 char) atau
+ *  scan singkat lainnya, sekaligus membiarkan format resi normal (JNT=12, GTL=14, dll). */
+const MIN_RESI_LENGTH = 10;
 
 /**
  * Bersihkan hasil scan dari kontaminasi scanner HID:
@@ -101,6 +103,11 @@ export default function ScanPage() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const feedbackTimer = useRef<NodeJS.Timeout | null>(null);
+  // Lock sinkron untuk mencegah race condition double-scan:
+  // `processing` state React bersifat async (batch update), sehingga dua Enter
+  // yang datang sangat cepat bisa lolos sebelum state sempat berubah.
+  // `processingRef` diupdate secara sinkron sehingga lock langsung berlaku.
+  const processingRef = useRef(false);
 
   const today = todayString();
 
@@ -164,14 +171,21 @@ export default function ScanPage() {
   const handleScan = useCallback(
     async (value: string) => {
       const resi = value.trim().toUpperCase();
-      if (!resi || processing || !selectedKarung || !appUser) return;
+
+      // Guard: data wajib ada
+      if (!resi || !selectedKarung || !appUser) {
+        processingRef.current = false;
+        return;
+      }
 
       // Tolak partial scan — barcode tidak terbaca sempurna
       if (resi.length < MIN_RESI_LENGTH) {
         setFeedback("failed");
-        setLastResi(`SCAN TIDAK LENGKAP (${resi.length} karakter)`);
+        setLastResi(`SCAN TIDAK LENGKAP (${resi.length} karakter — min ${MIN_RESI_LENGTH})`);
         await playFailed();
         resetFeedback();
+        processingRef.current = false;
+        setProcessing(false);
         return;
       }
 
@@ -181,63 +195,74 @@ export default function ScanPage() {
         setLastResi("KARUNG TERKUNCI");
         await playFailed();
         resetFeedback();
+        processingRef.current = false;
+        setProcessing(false);
         return;
       }
 
       setProcessing(true);
 
-      const { isDuplicate, karungInfo } = await checkDuplicateResi(selectedKarung.id, resi);
+      try {
+        const { isDuplicate, karungInfo } = await checkDuplicateResi(selectedKarung.id, resi);
 
-      if (isDuplicate) {
-        setFeedback("duplicate");
+        if (isDuplicate) {
+          setFeedback("duplicate");
+          setLastResi(resi);
+          setDuplicateInfo(karungInfo ?? "");
+          await playFailed();
+          resetFeedback();
+          return;
+        }
+
+        const now = new Date();
+        const scan: Omit<ScanRecord, "id"> = {
+          karungId: selectedKarung.id,
+          expedisiId: selectedExpedisi!.id,
+          expedisiName: selectedExpedisi!.name,
+          nomorKarung: selectedKarung.nomorKarung,
+          noResi: resi,
+          scannedBy: appUser.uid,
+          scannedByName: appUser.name,
+          scannedAt: Timestamp.fromDate(now),
+          date: today,
+          status: "success",
+          syncedToSheet: false,
+        };
+
+        const saved = await addScanRecord(scan);
+        setFeedback("success");
         setLastResi(resi);
-        setDuplicateInfo(karungInfo ?? "");
+        await playSuccess();
+
+        // Sync to Google Sheets in background
+        if (settings?.spreadsheetId) {
+          syncToSheet({
+            scanId: saved.id,
+            noResi: resi,
+            nomorKarung: selectedKarung.nomorKarung,
+            expedisiName: selectedExpedisi!.name,
+            expedisiCode: selectedExpedisi!.code,
+            scannedByName: appUser.name,
+            scannedAt: now.toISOString(),
+            date: today,
+            spreadsheetId: settings.spreadsheetId,
+          });
+        }
+
+        resetFeedback();
+      } catch (err) {
+        console.error("handleScan error:", err);
+        setFeedback("failed");
+        setLastResi("ERROR — coba scan ulang");
         await playFailed();
         resetFeedback();
+      } finally {
+        // Selalu lepas kunci di akhir, apapun hasilnya
+        processingRef.current = false;
         setProcessing(false);
-        return;
       }
-
-      const now = new Date();
-      const scan: Omit<ScanRecord, "id"> = {
-        karungId: selectedKarung.id,
-        expedisiId: selectedExpedisi!.id,
-        expedisiName: selectedExpedisi!.name,
-        nomorKarung: selectedKarung.nomorKarung,
-        noResi: resi,
-        scannedBy: appUser.uid,
-        scannedByName: appUser.name,
-        scannedAt: Timestamp.fromDate(now),
-        date: today,
-        status: "success",
-        syncedToSheet: false,
-      };
-
-      const saved = await addScanRecord(scan);
-      setFeedback("success");
-      setLastResi(resi);
-      await playSuccess();
-
-      // Sync to Google Sheets in background
-      if (settings?.spreadsheetId) {
-        syncToSheet({
-          scanId: saved.id,
-          noResi: resi,
-          nomorKarung: selectedKarung.nomorKarung,
-          expedisiName: selectedExpedisi!.name,
-          expedisiCode: selectedExpedisi!.code,
-          scannedByName: appUser.name,
-          scannedAt: now.toISOString(),
-          date: today,
-          spreadsheetId: settings.spreadsheetId,
-        });
-      }
-
-      resetFeedback();
-      setProcessing(false);
     },
     [
-      processing,
       selectedKarung,
       selectedExpedisi,
       appUser,
@@ -253,8 +278,14 @@ export default function ScanPage() {
   // Input langsung di-clear agar karakter barcode berikutnya tidak tersisa.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !processing) {
+      if (e.key === "Enter") {
         e.preventDefault();
+
+        // Gunakan processingRef (sinkron) bukan state `processing` (async).
+        // Ini mencegah race condition: dua Enter cepat keduanya lolos sebelum
+        // React sempat memperbarui state.
+        if (processingRef.current) return;
+        processingRef.current = true; // kunci sinkron sekarang juga
 
         // Tangkap nilai dari DOM sekarang — paling akurat untuk HID scanner
         const captured = (inputRef.current?.value ?? "").trim();
@@ -268,11 +299,16 @@ export default function ScanPage() {
         // tidak menangkap karakter dari barcode berikutnya.
         setTimeout(() => {
           const cleaned = cleanResi(captured);
-          if (cleaned) handleScan(cleaned);
+          if (cleaned) {
+            handleScan(cleaned);
+          } else {
+            // Tidak ada yang di-scan — lepas kunci
+            processingRef.current = false;
+          }
         }, 30);
       }
     },
-    [processing, handleScan]
+    [handleScan]
   );
 
   // ── Add new expedisi (dengan cek duplikat) ──────────────────────────────
