@@ -35,12 +35,11 @@ const SC_LAST   = 22; // halaman terakhir: compact header + footer
 
 // ── Two-column constants (rows PER COLUMN per physical page) ──
 // Font 9px, padding 2px → ~14-15px per row. A4 usable height ~1017px.
-// First page  (big header ~165px + table head ~18px)         : (1017-183)/14.5 ≈ 58 → use 44
-// Middle page (compact header ~45px + table head ~18px)      : (1017-63)/14.5  ≈ 66 → use 48
-// Last page   (compact header ~45px + head + footer ~180px)  : (1017-243)/14.5 ≈ 53 → use 36
+// First page  (big header ~165px + table head ~18px) : (1017-183)/14.5 ≈ 58 → use 44
+// Middle page (compact header ~45px + table head)    : (1017-63)/14.5  ≈ 66 → use 48
+// Last page max = TC_MIDDLE per column (48 rows) + footer (~180px) = 939px < 993px → fits
 const TC_FIRST  = 44; // rows per column, halaman pertama
-const TC_MIDDLE = 48; // rows per column, halaman tengah
-const TC_LAST   = 36; // rows per column, halaman terakhir
+const TC_MIDDLE = 48; // rows per column, halaman tengah (dan terakhir — verif: 48×14.5+footer=939px<993px)
 
 // Threshold: pakai 1 kolom jika seluruh data muat di 1 halaman
 const SC_THRESHOLD = SC_ONLY;
@@ -50,7 +49,11 @@ interface PageResult { pages: string[][][]; twoCol: boolean; }
 /**
  * Bangun slice halaman dengan kapasitas maksimal.
  * - ≤ SC_THRESHOLD baris  → 1 kolom, 1 halaman
- * - > SC_THRESHOLD baris  → 2 kolom, setiap halaman menampung TC_* × 2 baris
+ * - > SC_THRESHOLD baris  → 2 kolom
+ *
+ * Prinsip: setiap halaman NON-TERAKHIR diisi penuh (TC_FIRST / TC_MIDDLE × 2).
+ * Halaman terakhir mengambil sisa baris, berapa pun jumlahnya.
+ * Tidak ada penggalan "middle page setengah kosong" karena sisa muat di last page.
  */
 function buildPages(rows: string[][]): PageResult {
   if (rows.length === 0) return { pages: [[]], twoCol: false };
@@ -58,36 +61,27 @@ function buildPages(rows: string[][]): PageResult {
   // Cukup 1 halaman dengan 1 kolom
   if (rows.length <= SC_THRESHOLD) return { pages: [rows], twoCol: false };
 
-  // Mode 2 kolom — kapasitas per halaman = 2 × TC_*
+  // Mode 2 kolom
   const FIRST  = TC_FIRST  * 2;
   const MIDDLE = TC_MIDDLE * 2;
-  const LAST   = TC_LAST   * 2;
 
   const pages: string[][][] = [];
   let pos = 0;
-  const total = rows.length;
 
-  while (pos < total) {
+  while (pos < rows.length) {
     const isFirst  = pages.length === 0;
     const capacity = isFirst ? FIRST : MIDDLE;
-    const remaining = total - pos;
+    const remaining = rows.length - pos;
 
     if (remaining <= capacity) {
-      if (remaining > LAST) {
-        const takeNow  = remaining - LAST;
-        const safeTake = Math.min(takeNow, capacity);
-        if (safeTake > 0 && safeTake < remaining) {
-          pages.push(rows.slice(pos, pos + safeTake));
-          pos += safeTake;
-          continue;
-        }
-      }
+      // Sisa baris muat dalam 1 halaman → jadikan halaman terakhir
       pages.push(rows.slice(pos));
       break;
-    } else {
-      pages.push(rows.slice(pos, pos + capacity));
-      pos += capacity;
     }
+
+    // Isi halaman ini sampai penuh, lanjut iterasi
+    pages.push(rows.slice(pos, pos + capacity));
+    pos += capacity;
   }
 
   return { pages, twoCol: true };
