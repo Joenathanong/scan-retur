@@ -80,6 +80,11 @@
 }
 
 /* Print styles */
+@page {
+  size: 215mm 330mm; /* Kertas F4 */
+  margin: 1.4cm 1.8cm;
+}
+
 @media print {
   .no-print { display: none !important; }
   body { background: white !important; }

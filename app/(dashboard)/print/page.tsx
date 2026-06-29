@@ -27,13 +27,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-// Pagination constants — empirically calibrated for F4 (215×330mm) @page margin 1.8cm 2cm
-// Page 0: tall company header takes ~extra 2–3 rows of height
-// Last page: footer (note + signatures) takes ~8–10 rows of height
-const ROWS_FIRST_ONLY = 20; // single page doc: big header + rows + footer all on one page
-const ROWS_FIRST      = 28; // first page of multi-page: big header, no footer
-const ROWS_MIDDLE     = 33; // continuation pages: compact header, no footer
-const ROWS_LAST_MAX   = 20; // last page of multi-page: compact header + footer
+// Pagination constants — F4 (215×330mm) @page margin 1.4cm 1.8cm, compact 10px row height
+// Page 0: logo header + info grid takes ~extra rows of height
+// Last page: footer (note + signatures) takes space
+const ROWS_FIRST_ONLY = 25; // single page doc: big header + rows + footer
+const ROWS_FIRST      = 36; // first page of multi-page: big header, no footer
+const ROWS_MIDDLE     = 44; // continuation pages: compact header, no footer
+const ROWS_LAST_MAX   = 28; // last page of multi-page: compact header + footer
 
 /** Build variable-height page slices so every physical page is maximally filled. */
 function buildPages(rows: string[][]): string[][][] {
@@ -516,20 +516,25 @@ function PrintPageInner() {
               }`}
             style={pageIndex < totalPages - 1 ? { pageBreakAfter: "always", breakAfter: "page" } : {}}
             >
-              <div style={{ padding: "28px 32px", fontFamily: "Arial, sans-serif" }}>
+              <div style={{ padding: "20px 24px", fontFamily: "Arial, sans-serif" }}>
 
                 {/* ── Document Header ── */}
                 {pageIndex === 0 ? (
                   <>
-                    {/* Top bar: company left, document type right */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "4px" }}>
-                      <div>
-                        <div style={{ fontSize: "18px", fontWeight: "700", color: "#0f172a", letterSpacing: "-0.3px" }}>
-                          {namaPerusahaan}
-                        </div>
-                        <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>
-                          Sistem Manajemen Retur Barang
-                        </div>
+                    {/* Top bar: logo left, document type right */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                      {/* Logo — simpan file ke public/logo.png (atau public/logo.jpg) */}
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src="/logo.png"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith("/logo.jpg")) img.src = "/logo.jpg";
+                          }}
+                          alt={namaPerusahaan}
+                          style={{ height: "48px", maxWidth: "160px", objectFit: "contain" }}
+                        />
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: "15px", fontWeight: "700", color: "#0f172a", textTransform: "uppercase", letterSpacing: "0.5px" }}>
@@ -542,13 +547,13 @@ function PrintPageInner() {
                     </div>
 
                     {/* Divider */}
-                    <div style={{ height: "3px", background: "linear-gradient(to right, #0f172a, #334155)", borderRadius: "2px", margin: "12px 0 16px" }} />
+                    <div style={{ height: "3px", background: "linear-gradient(to right, #0f172a, #334155)", borderRadius: "2px", margin: "8px 0 10px" }} />
 
-                    {/* Info grid */}
+                    {/* Info grid — compact */}
                     <div style={{
                       display: "grid", gridTemplateColumns: "1fr 1fr",
                       border: "1px solid #e2e8f0", borderRadius: "6px",
-                      overflow: "hidden", marginBottom: "20px", fontSize: "12px",
+                      overflow: "hidden", marginBottom: "12px", fontSize: "11px",
                     }}>
                       {[
                         ["Ekspedisi", expedisiName],
@@ -557,51 +562,63 @@ function PrintPageInner() {
                         ["Total Resi", `${sheetRows.length} item`],
                       ].map(([label, value], i) => (
                         <div key={i} style={{
-                          padding: "8px 14px",
+                          padding: "5px 12px",
                           borderRight: i % 2 === 0 ? "1px solid #e2e8f0" : "none",
                           borderBottom: i < 2 ? "1px solid #e2e8f0" : "none",
                           backgroundColor: i % 2 === 0 ? "#f8fafc" : "#ffffff",
                         }}>
-                          <span style={{ color: "#94a3b8", fontSize: "10px", display: "block", marginBottom: "2px" }}>{label}</span>
+                          <span style={{ color: "#94a3b8", fontSize: "9px", display: "block", marginBottom: "1px" }}>{label}</span>
                           <span style={{ fontWeight: "600", color: "#0f172a" }}>{value}</span>
                         </div>
                       ))}
                     </div>
                   </>
                 ) : (
-                  /* Continuation page — compact header */
-                  <div style={{ marginBottom: "16px" }}>
+                  /* Continuation page — compact header with small logo */
+                  <div style={{ marginBottom: "10px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                        {namaPerusahaan} — TANDA TERIMA <span style={{ fontWeight: "400", color: "#64748b" }}>(Lanjutan)</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src="/logo.png"
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (!img.src.endsWith("/logo.jpg")) img.src = "/logo.jpg";
+                          }}
+                          alt={namaPerusahaan}
+                          style={{ height: "28px", maxWidth: "90px", objectFit: "contain" }}
+                        />
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
+                          TANDA TERIMA <span style={{ fontWeight: "400", color: "#64748b" }}>(Lanjutan)</span>
+                        </span>
                       </div>
-                      <div style={{ fontSize: "11px", color: "#64748b" }}>
+                      <div style={{ fontSize: "10px", color: "#64748b" }}>
                         {expedisiName} · {formatDate(printDate)} · Hal. {pageIndex + 1}/{totalPages}
                       </div>
                     </div>
-                    <div style={{ height: "2px", background: "#e2e8f0", margin: "10px 0 16px" }} />
+                    <div style={{ height: "2px", background: "#e2e8f0", margin: "8px 0 10px" }} />
                   </div>
                 )}
 
                 {/* ── Table ── */}
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px", marginBottom: "16px" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px", marginBottom: "10px" }}>
                   <thead>
                     <tr style={{ backgroundColor: "#0f172a" }}>
                       {["No.", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"].map((h, i) => (
                         <th key={i} style={{
-                          padding: "7px 8px",
+                          padding: "5px 6px",
                           color: "#ffffff",
                           fontWeight: "600",
-                          fontSize: "11px",
+                          fontSize: "10px",
                           border: "1px solid #1e293b",
                           textAlign: i === 0 || i >= 4 ? "center" : "left",
                           whiteSpace: "nowrap",
-                          ...(i === 0 ? { width: "34px" } : {}),
-                          ...(i === 1 ? { width: "130px" } : {}),  // kode resi — lebih sempit
-                          ...(i === 2 ? { width: "72px" } : {}),
-                          ...(i === 3 ? { width: "160px" } : {}),  // di scan oleh — lebih lebar
-                          ...(i === 4 ? { width: "80px" } : {}),
-                          ...(i === 5 ? { width: "58px" } : {}),
+                          ...(i === 0 ? { width: "30px" } : {}),
+                          ...(i === 1 ? { width: "120px" } : {}),
+                          ...(i === 2 ? { width: "65px" } : {}),
+                          ...(i === 3 ? { width: "155px" } : {}),
+                          ...(i === 4 ? { width: "72px" } : {}),
+                          ...(i === 5 ? { width: "52px" } : {}),
                         }}>
                           {h}
                         </th>
@@ -613,12 +630,12 @@ function PrintPageInner() {
                       const isEven = i % 2 === 0;
                       return (
                         <tr key={i} style={{ backgroundColor: isEven ? "#ffffff" : "#f8fafc" }}>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "10px" }}>{row[0]}</td>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "11px" }}>{row[1]}</td>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
-                          <td style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "9px" }}>{row[0]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "10px" }}>{row[1]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", color: "#334155" }}>{row[3]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
+                          <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
                         </tr>
                       );
                     })}
@@ -627,7 +644,7 @@ function PrintPageInner() {
                   {pageIndex === totalPages - 1 && (
                     <tfoot>
                       <tr style={{ backgroundColor: "#f1f5f9" }}>
-                        <td colSpan={6} style={{ padding: "5px 8px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "11px", color: "#0f172a" }}>
+                        <td colSpan={6} style={{ padding: "4px 6px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "10px", color: "#0f172a" }}>
                           Total Keseluruhan : {sheetRows.length} resi
                         </td>
                       </tr>
@@ -643,30 +660,30 @@ function PrintPageInner() {
                       border: "1px solid #fcd34d",
                       borderLeft: "4px solid #f59e0b",
                       borderRadius: "4px",
-                      padding: "10px 14px",
-                      marginBottom: "28px",
+                      padding: "7px 12px",
+                      marginBottom: "18px",
                       backgroundColor: "#fffbeb",
-                      fontSize: "10px",
+                      fontSize: "9px",
                       color: "#78350f",
-                      lineHeight: "1.5",
+                      lineHeight: "1.4",
                     }}>
                       <span style={{ fontWeight: "700", color: "#92400e" }}>Keterangan : </span>
                       {noteTandaTerima}
                     </div>
 
                     {/* Signatures */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "60px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "48px" }}>
                       {[
                         { label: "Yang Menyerahkan,", sub: expedisiName },
                         { label: "Yang Menerima,",    sub: namaPerusahaan },
                       ].map((sig, i) => (
                         <div key={i} style={{ textAlign: "center" }}>
-                          <div style={{ fontSize: "11px", fontWeight: "600", color: "#334155", marginBottom: "64px" }}>
+                          <div style={{ fontSize: "10px", fontWeight: "600", color: "#334155", marginBottom: "52px" }}>
                             {sig.label}
                           </div>
-                          <div style={{ borderTop: "1.5px solid #94a3b8", paddingTop: "8px" }}>
-                            <div style={{ fontSize: "10px", color: "#94a3b8" }}>(Nama &amp; Tanda Tangan)</div>
-                            <div style={{ fontSize: "11px", fontWeight: "600", color: "#334155", marginTop: "3px" }}>{sig.sub}</div>
+                          <div style={{ borderTop: "1.5px solid #94a3b8", paddingTop: "6px" }}>
+                            <div style={{ fontSize: "9px", color: "#94a3b8" }}>(Nama &amp; Tanda Tangan)</div>
+                            <div style={{ fontSize: "10px", fontWeight: "600", color: "#334155", marginTop: "2px" }}>{sig.sub}</div>
                           </div>
                         </div>
                       ))}
@@ -674,8 +691,8 @@ function PrintPageInner() {
 
                     {/* Document footer */}
                     <div style={{
-                      marginTop: "24px",
-                      paddingTop: "10px",
+                      marginTop: "16px",
+                      paddingTop: "8px",
                       borderTop: "1px solid #e2e8f0",
                       display: "flex",
                       justifyContent: "space-between",
@@ -711,6 +728,7 @@ function PrintPageInner() {
           /* Sembunyikan elemen layout (sidebar, header, action bar) */
           .no-print { display: none !important; }
 
+        
           /* Hapus padding/margin layout wrapper */
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
           main { padding: 0 !important; margin: 0 !important; }
@@ -732,7 +750,7 @@ function PrintPageInner() {
           /* F4 215×330mm, margin cukup agar tidak mentok tepi */
           @page {
             size: 215mm 330mm portrait;
-            margin: 1.8cm 2cm;
+            margin: 1.4cm 1.8cm;
           }
         }
       `}</style>
