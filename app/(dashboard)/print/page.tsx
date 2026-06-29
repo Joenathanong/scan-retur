@@ -27,39 +27,59 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-// Pagination constants — F4 (215×330mm) @page margin 1.4cm 1.8cm, compact 10px row height
-// Page 0: logo header + info grid takes ~extra rows of height
-// Last page: footer (note + signatures) takes space
-const ROWS_FIRST_ONLY = 25; // single page doc: big header + rows + footer
-const ROWS_FIRST      = 36; // first page of multi-page: big header, no footer
-const ROWS_MIDDLE     = 44; // continuation pages: compact header, no footer
-const ROWS_LAST_MAX   = 28; // last page of multi-page: compact header + footer
+// ── Single-column constants (F4, margin 1.4cm 1.8cm, font 10px, row padding 3px) ──
+const SC_ONLY   = 25; // 1 halaman: big header + rows + footer
+const SC_FIRST  = 36; // halaman pertama multi-page: big header, tanpa footer
+const SC_MIDDLE = 44; // halaman tengah: compact header, tanpa footer
+const SC_LAST   = 28; // halaman terakhir: compact header + footer
 
-/** Build variable-height page slices so every physical page is maximally filled. */
-function buildPages(rows: string[][]): string[][][] {
-  if (rows.length === 0) return [[]];
-  // Small doc: fits on a single page (big header + all rows + footer)
-  if (rows.length <= ROWS_FIRST_ONLY) return [rows];
+// ── Two-column constants (rows PER COLUMN per physical page) ──
+// Font 9px, padding 2px → ~15px per row. F4 usable height ~1145px.
+// First page  (big header ~80px + table head ~18px)         : (1145-98)/15 ≈ 70 → use 50
+// Middle page (compact header ~35px + table head ~18px)     : (1145-53)/15 ≈ 73 → use 58
+// Last page   (compact header ~35px + head + footer ~170px) : (1145-223)/15 ≈ 61 → use 46
+const TC_FIRST  = 50; // rows per column, halaman pertama
+const TC_MIDDLE = 58; // rows per column, halaman tengah
+const TC_LAST   = 46; // rows per column, halaman terakhir
+
+// Threshold: pakai 1 kolom jika seluruh data muat di 1 halaman
+const SC_THRESHOLD = SC_ONLY;
+
+interface PageResult { pages: string[][][]; twoCol: boolean; }
+
+/**
+ * Bangun slice halaman dengan kapasitas maksimal.
+ * - ≤ SC_THRESHOLD baris  → 1 kolom, 1 halaman
+ * - > SC_THRESHOLD baris  → 2 kolom, setiap halaman menampung TC_* × 2 baris
+ */
+function buildPages(rows: string[][]): PageResult {
+  if (rows.length === 0) return { pages: [[]], twoCol: false };
+
+  // Cukup 1 halaman dengan 1 kolom
+  if (rows.length <= SC_THRESHOLD) return { pages: [rows], twoCol: false };
+
+  // Mode 2 kolom — kapasitas per halaman = 2 × TC_*
+  const FIRST  = TC_FIRST  * 2;
+  const MIDDLE = TC_MIDDLE * 2;
+  const LAST   = TC_LAST   * 2;
 
   const pages: string[][][] = [];
   let pos = 0;
   const total = rows.length;
 
   while (pos < total) {
-    const isFirst = pages.length === 0;
-    const capacity = isFirst ? ROWS_FIRST : ROWS_MIDDLE;
+    const isFirst  = pages.length === 0;
+    const capacity = isFirst ? FIRST : MIDDLE;
     const remaining = total - pos;
 
     if (remaining <= capacity) {
-      // This will be the final page (footer printed here)
-      if (remaining > ROWS_LAST_MAX) {
-        // Too many for last page — offload excess to current (non-footer) page
-        const takeNow = remaining - ROWS_LAST_MAX;
+      if (remaining > LAST) {
+        const takeNow  = remaining - LAST;
         const safeTake = Math.min(takeNow, capacity);
         if (safeTake > 0 && safeTake < remaining) {
           pages.push(rows.slice(pos, pos + safeTake));
           pos += safeTake;
-          continue; // next iteration adds the remaining ≤ ROWS_LAST_MAX as last page
+          continue;
         }
       }
       pages.push(rows.slice(pos));
@@ -70,7 +90,7 @@ function buildPages(rows: string[][]): string[][][] {
     }
   }
 
-  return pages;
+  return { pages, twoCol: true };
 }
 
 export default function PrintPage() {
@@ -285,7 +305,7 @@ function PrintPageInner() {
     "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG";
   const anyLocked        = karungList.some((k) => isKarungLocked(k));
 
-  const pages      = buildPages(sheetRows);
+  const { pages, twoCol } = buildPages(sheetRows);
   const totalPages = Math.max(1, pages.length);
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -601,35 +621,81 @@ function PrintPageInner() {
                 )}
 
                 {/* ── Table ── */}
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px", marginBottom: "10px" }}>
-                  <thead>
-                    <tr style={{ backgroundColor: "#0f172a" }}>
-                      {["No.", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"].map((h, i) => (
-                        <th key={i} style={{
-                          padding: "5px 6px",
-                          color: "#ffffff",
-                          fontWeight: "600",
-                          fontSize: "10px",
-                          border: "1px solid #1e293b",
-                          textAlign: i === 0 || i >= 4 ? "center" : "left",
-                          whiteSpace: "nowrap",
-                          ...(i === 0 ? { width: "30px" } : {}),
-                          ...(i === 1 ? { width: "120px" } : {}),
-                          ...(i === 2 ? { width: "65px" } : {}),
-                          ...(i === 3 ? { width: "155px" } : {}),
-                          ...(i === 4 ? { width: "72px" } : {}),
-                          ...(i === 5 ? { width: "52px" } : {}),
-                        }}>
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pageRows.map((row, i) => {
-                      const isEven = i % 2 === 0;
-                      return (
-                        <tr key={i} style={{ backgroundColor: isEven ? "#ffffff" : "#f8fafc" }}>
+                {twoCol ? (
+                  /* ── 2-column layout ──────────────────────────────────────────
+                     Baris dibagi dua: kiri dan kanan. Kolom Tanggal dihilangkan
+                     karena semua baris dalam 1 dokumen punya tanggal yang sama.  */
+                  (() => {
+                    const mid      = Math.ceil(pageRows.length / 2);
+                    const leftRows = pageRows.slice(0, mid);
+                    const rightRows = pageRows.slice(mid);
+
+                    const TD_STYLE: React.CSSProperties = {
+                      padding: "2px 4px", border: "1px solid #e2e8f0",
+                    };
+                    const TH_STYLE: React.CSSProperties = {
+                      padding: "4px 4px", color: "#fff", fontWeight: "600",
+                      fontSize: "9px", border: "1px solid #1e293b", whiteSpace: "nowrap",
+                    };
+
+                    const ColTable = ({ colRows }: { colRows: string[][] }) => (
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "9px" }}>
+                        <thead>
+                          <tr style={{ backgroundColor: "#0f172a" }}>
+                            <th style={{ ...TH_STYLE, width: "22px",  textAlign: "center" }}>No.</th>
+                            <th style={{ ...TH_STYLE, width: "98px",  textAlign: "left"   }}>Kode Resi</th>
+                            <th style={{ ...TH_STYLE, width: "44px",  textAlign: "center" }}>No.Krg</th>
+                            <th style={{ ...TH_STYLE,                 textAlign: "left"   }}>Di Scan Oleh</th>
+                            <th style={{ ...TH_STYLE, width: "42px",  textAlign: "center" }}>Jam</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {colRows.map((row, i) => (
+                            <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#f8fafc" }}>
+                              <td style={{ ...TD_STYLE, textAlign: "center", color: "#94a3b8", fontSize: "8px" }}>{row[0]}</td>
+                              <td style={{ ...TD_STYLE, fontFamily: "monospace", fontWeight: "600", color: "#0f172a" }}>{row[1]}</td>
+                              <td style={{ ...TD_STYLE, textAlign: "center", color: "#334155" }}>{row[2]}</td>
+                              <td style={{ ...TD_STYLE, color: "#334155" }}>{row[3]}</td>
+                              <td style={{ ...TD_STYLE, textAlign: "center", color: "#475569" }}>{row[5]}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+
+                    return (
+                      <div style={{ display: "flex", gap: "6px", alignItems: "flex-start", marginBottom: "8px" }}>
+                        <div style={{ flex: 1, minWidth: 0 }}><ColTable colRows={leftRows} /></div>
+                        <div style={{ flex: 1, minWidth: 0 }}><ColTable colRows={rightRows} /></div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  /* ── 1-column layout (data cukup 1 halaman) ── */
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px", marginBottom: "10px" }}>
+                    <thead>
+                      <tr style={{ backgroundColor: "#0f172a" }}>
+                        {["No.", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"].map((h, i) => (
+                          <th key={i} style={{
+                            padding: "5px 6px", color: "#ffffff", fontWeight: "600", fontSize: "10px",
+                            border: "1px solid #1e293b",
+                            textAlign: i === 0 || i >= 4 ? "center" : "left",
+                            whiteSpace: "nowrap",
+                            ...(i === 0 ? { width: "30px"  } : {}),
+                            ...(i === 1 ? { width: "120px" } : {}),
+                            ...(i === 2 ? { width: "65px"  } : {}),
+                            ...(i === 3 ? { width: "155px" } : {}),
+                            ...(i === 4 ? { width: "72px"  } : {}),
+                            ...(i === 5 ? { width: "52px"  } : {}),
+                          }}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((row, i) => (
+                        <tr key={i} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#f8fafc" }}>
                           <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#94a3b8", fontSize: "9px" }}>{row[0]}</td>
                           <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", fontFamily: "monospace", fontWeight: "600", color: "#0f172a", fontSize: "10px" }}>{row[1]}</td>
                           <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#334155" }}>{row[2]}</td>
@@ -637,20 +703,17 @@ function PrintPageInner() {
                           <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[4]}</td>
                           <td style={{ padding: "3px 6px", border: "1px solid #e2e8f0", textAlign: "center", color: "#475569" }}>{row[5]}</td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                  {/* Total row on last page */}
-                  {pageIndex === totalPages - 1 && (
-                    <tfoot>
-                      <tr style={{ backgroundColor: "#f1f5f9" }}>
-                        <td colSpan={6} style={{ padding: "4px 6px", border: "1px solid #e2e8f0", textAlign: "right", fontWeight: "700", fontSize: "10px", color: "#0f172a" }}>
-                          Total Keseluruhan : {sheetRows.length} resi
-                        </td>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                {/* Total — halaman terakhir */}
+                {pageIndex === totalPages - 1 && (
+                  <div style={{ textAlign: "right", fontWeight: "700", fontSize: "10px", color: "#0f172a", padding: "4px 6px", backgroundColor: "#f1f5f9", border: "1px solid #e2e8f0", marginBottom: "10px" }}>
+                    Total Keseluruhan : {sheetRows.length} resi
+                  </div>
+                )}
 
                 {/* ── Footer — last page only ── */}
                 {pageIndex === totalPages - 1 && (
@@ -719,21 +782,13 @@ function PrintPageInner() {
 
       <style>{`
         @media print {
-          /* Paksa warna background tercetak */
           * {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
-
-          /* Sembunyikan elemen layout (sidebar, header, action bar) */
           .no-print { display: none !important; }
-
-        
-          /* Hapus padding/margin layout wrapper */
           body { background: white !important; margin: 0 !important; padding: 0 !important; }
           main { padding: 0 !important; margin: 0 !important; }
-
-          /* Print container full width, tanpa ornamen screen */
           .print-container {
             max-width: 100% !important;
             margin: 0 !important;
@@ -746,8 +801,6 @@ function PrintPageInner() {
             margin: 0 !important;
             padding: 0 !important;
           }
-
-          /* F4 215×330mm, margin cukup agar tidak mentok tepi */
           @page {
             size: 215mm 330mm portrait;
             margin: 1.4cm 1.8cm;
