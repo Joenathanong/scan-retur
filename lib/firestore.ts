@@ -6,6 +6,7 @@ import {
   setDoc,
   addDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   orderBy,
@@ -176,6 +177,21 @@ export async function updateKarungNomor(
 ) {
   await updateDoc(doc(db, "karung", id), { nomorKarung });
   await addAuditLog(uid, userName, "EDIT_KARUNG_NOMOR", `Edit nomor karung ID ${id} → ${nomorKarung}`);
+}
+
+// ── DELETE KARUNG (hanya yang kosong / totalResi === 0) ────────────────────
+export async function deleteKarung(
+  id: string,
+  nomorKarung: string,
+  uid: string,
+  userName: string
+) {
+  const karungDoc = await getDoc(doc(db, "karung", id));
+  if (!karungDoc.exists()) throw new Error("Karung tidak ditemukan");
+  const data = karungDoc.data();
+  if ((data?.totalResi ?? 0) > 0) throw new Error("Karung tidak kosong, tidak bisa dihapus");
+  await deleteDoc(doc(db, "karung", id));
+  await addAuditLog(uid, userName, "DELETE_KARUNG", `Hapus karung #${nomorKarung} (ID: ${id})`);
 }
 
 // ─── KARUNG ────────────────────────────────────────────────────────────────

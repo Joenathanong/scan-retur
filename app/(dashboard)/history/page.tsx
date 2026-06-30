@@ -12,6 +12,7 @@ import {
   isKarungLocked,
   getAuditLogs,
   updateKarungNomor,
+  deleteKarung,
 } from "@/lib/firestore";
 import { todayString, formatDate, formatDateTime, cn } from "@/lib/utils";
 import type { Karung, AuditLog } from "@/types";
@@ -32,6 +33,7 @@ import {
   Edit2,
   Check,
   X,
+  Trash2,
 } from "lucide-react";
 
 export default function HistoryPage() {
@@ -54,6 +56,8 @@ export default function HistoryPage() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [search, setSearch] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const isAdmin = appUser?.role === "admin";
 
@@ -126,6 +130,18 @@ export default function HistoryPage() {
     );
     setEditingNomor(null);
     setSavingNomor(false);
+  };
+
+  const handleDeleteKarung = async (k: Karung) => {
+    if (!appUser) return;
+    setDeletingId(k.id);
+    try {
+      await deleteKarung(k.id, k.nomorKarung, appUser.uid, appUser.name);
+      setKarungList((prev) => prev.filter((item) => item.id !== k.id));
+    } finally {
+      setDeletingId(null);
+      setDeleteConfirmId(null);
+    }
   };
 
   const loadAudit = async () => {
@@ -306,6 +322,38 @@ export default function HistoryPage() {
                         >
                           <Printer className="w-3.5 h-3.5" /> Print
                         </button>
+
+                        {/* Delete — hanya admin, hanya karung kosong */}
+                        {isAdmin && k.totalResi === 0 && (
+                          deleteConfirmId === k.id ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-red-600 font-medium">Hapus?</span>
+                              <button
+                                onClick={() => handleDeleteKarung(k)}
+                                disabled={deletingId === k.id}
+                                className="btn-ghost text-xs px-2 py-1.5 text-red-600 hover:bg-red-50"
+                              >
+                                {deletingId === k.id
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <Check className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirmId(null)}
+                                className="btn-ghost text-xs px-2 py-1.5"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setDeleteConfirmId(k.id)}
+                              className="btn-ghost text-xs px-2.5 py-1.5 text-red-400 hover:text-red-600 hover:bg-red-50"
+                              title="Hapus karung kosong"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )
+                        )}
 
                         {/* Admin lock/unlock */}
                         {isAdmin && (
