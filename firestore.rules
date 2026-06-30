@@ -38,7 +38,7 @@ service cloud.firestore {
       allow read: if isActive();
       allow create: if isActive();
       allow update: if isActive();
-      allow delete: if false;
+      allow delete: if isAdmin() && resource.data.totalResi == 0;
     }
 
     // Scans

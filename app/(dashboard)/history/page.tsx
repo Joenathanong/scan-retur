@@ -58,6 +58,7 @@ export default function HistoryPage() {
   const [search, setSearch] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const isAdmin = appUser?.role === "admin";
 
@@ -135,12 +136,15 @@ export default function HistoryPage() {
   const handleDeleteKarung = async (k: Karung) => {
     if (!appUser) return;
     setDeletingId(k.id);
+    setDeleteError(null);
     try {
       await deleteKarung(k.id, k.nomorKarung, appUser.uid, appUser.name);
       setKarungList((prev) => prev.filter((item) => item.id !== k.id));
+      setDeleteConfirmId(null);
+    } catch (err) {
+      setDeleteError(`Gagal hapus karung #${k.nomorKarung}: ${String(err)}`);
     } finally {
       setDeletingId(null);
-      setDeleteConfirmId(null);
     }
   };
 
@@ -223,6 +227,16 @@ export default function HistoryPage() {
               </button>
             </div>
           </div>
+
+          {/* Delete error */}
+          {deleteError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center justify-between text-sm text-red-700">
+              <span>{deleteError}</span>
+              <button onClick={() => setDeleteError(null)} className="ml-4 text-red-400 hover:text-red-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* Karung list */}
           {loading ? (
