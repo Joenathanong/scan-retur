@@ -9,6 +9,7 @@ import {
   ScanLine,
   History,
   Printer,
+  Table2,
   Users,
   Truck,
   Settings,
@@ -29,6 +30,7 @@ const navItems: NavItem[] = [
   { href: "/scan",      label: "Scan Retur",   icon: <ScanLine        className="w-5 h-5" /> },
   { href: "/history",   label: "History",      icon: <History         className="w-5 h-5" /> },
   { href: "/print",     label: "Print",        icon: <Printer         className="w-5 h-5" /> },
+  { href: "/data",      label: "Data & Export", icon: <Table2         className="w-5 h-5" /> },
 ];
 
 const adminItems: NavItem[] = [
