@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { getSettings, getAllExpedisi } from "@/lib/firestore";
 import { todayString, cn } from "@/lib/utils";
@@ -236,23 +236,138 @@ export default function DataPage() {
     }
   };
 
-  // ── Export CSV ───────────────────────────────────────────────────────────
-  const exportCSV = () => {
-    const headers = ["No.", "Expedisi", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"];
-    const csvRows = displayRows.map((r) => [
-      r.displayNo, r.expedisiCode, r.kodeResi, r.noKarung, r.diScanOleh, r.tanggal, r.jam,
-    ]);
-    const csv = [headers, ...csvRows]
-      .map((row) => row.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
-      .join("\r\n");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
-    a.download = `retur_${dateFrom}_to_${dateTo}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  // ── Export Excel ─────────────────────────────────────────────────────────
+  const [exporting, setExporting] = useState(false);
+
+  const exportExcel = useCallback(async () => {
+    if (displayRows.length === 0) return;
+    setExporting(true);
+    try {
+      const XLSX = await import("xlsx");
+
+      // ── Build worksheet data ──────────────────────────────────────────
+      const headers = ["No.", "Expedisi", "Kode Resi", "No. Karung", "Di Scan Oleh", "Tanggal", "Jam"];
+      const dataRows = displayRows.map((r) => [
+        r.displayNo,
+        r.expedisiCode,
+        r.kodeResi,
+        r.noKarung,
+        r.diScanOleh,
+        r.tanggal,
+        r.jam,
+      ]);
+
+      // Append summary row at bottom
+      const summaryParts = Object.entries(expStats)
+        .sort((a, b) => b[1] - a[1])
+        .map(([code, cnt]) => `${code}: ${cnt}`)
+        .join("  |  ");
+      const summaryRow = [`Total: ${displayRows.length} resi`, summaryParts, "", "", "", "", ""];
+
+      const wsData = [headers, ...dataRows, [], summaryRow];
+
+      // ── Create worksheet ──────────────────────────────────────────────
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+      // ── Column widths ─────────────────────────────────────────────────
+      ws["!cols"] = [
+        { wch: 5  },  // No.
+        { wch: 12 },  // Expedisi
+        { wch: 28 },  // Kode Resi
+        { wch: 10 },  // No. Karung
+        { wch: 18 },  // Di Scan Oleh
+        { wch: 14 },  // Tanggal
+        { wch: 10 },  // Jam
+      ];
+
+      // ── Style helpers ─────────────────────────────────────────────────
+      const headerFill   = { patternType: "solid", fgColor: { rgb: "1E293B" } }; // slate-800
+      const headerFont   = { bold: true, color: { rgb: "FFFFFF" }, sz: 10 };
+      const centerAlign  = { horizontal: "center", vertical: "center" };
+      const leftAlign    = { horizontal: "left",   vertical: "center" };
+      const monoFont     = { name: "Courier New", sz: 9 };
+      const normalFont   = { sz: 9 };
+      const altFill      = { patternType: "solid", fgColor: { rgb: "F8FAFC" } }; // slate-50
+      const border       = {
+        top:    { style: "thin", color: { rgb: "E2E8F0" } },
+        bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+        left:   { style: "thin", color: { rgb: "E2E8F0" } },
+        right:  { style: "thin", color: { rgb: "E2E8F0" } },
+      };
+      const summaryFill  = { patternType: "solid", fgColor: { rgb: "F1F5F9" } };
+      const summaryFont  = { bold: true, sz: 9, color: { rgb: "334155" } };
+
+      const colLetters = ["A", "B", "C", "D", "E", "F", "G"];
+
+      // Header row (row 1)
+      colLetters.forEach((col) => {
+        const ref = `${col}1`;
+        if (!ws[ref]) return;
+        ws[ref].s = {
+          fill:      headerFill,
+          font:      headerFont,
+          alignment: col === "A" || col === "D" || col === "F" || col === "G" ? centerAlign : leftAlign,
+          border,
+        };
+      });
+
+      // Data rows
+      dataRows.forEach((_, i) => {
+        const rowNum  = i + 2; // 1-indexed, row 1 = header
+        const isAlt   = i % 2 === 1;
+        colLetters.forEach((col, ci) => {
+          const ref = `${col}${rowNum}`;
+          if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+          const isCenter = ci === 0 || ci === 3 || ci === 5 || ci === 6;
+          const isMono   = ci === 2; // Kode Resi
+          ws[ref].s = {
+            fill:      isAlt ? altFill : { patternType: "none" },
+            font:      isMono ? { ...monoFont, bold: true } : normalFont,
+            alignment: isCenter ? centerAlign : leftAlign,
+            border,
+          };
+        });
+      });
+
+      // Summary row (after blank row)
+      const summaryRowNum = dataRows.length + 3; // +1 header +1 blank +1 summary
+      ["A", "B"].forEach((col) => {
+        const ref = `${col}${summaryRowNum}`;
+        if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+        ws[ref].s = {
+          fill: summaryFill,
+          font: summaryFont,
+          alignment: leftAlign,
+          border: {
+            top:    { style: "medium", color: { rgb: "CBD5E1" } },
+            bottom: { style: "medium", color: { rgb: "CBD5E1" } },
+            left:   { style: "thin",   color: { rgb: "E2E8F0" } },
+            right:  { style: "thin",   color: { rgb: "E2E8F0" } },
+          },
+        };
+      });
+
+      // ── Workbook title sheet ──────────────────────────────────────────
+      // Add a title row above the table using a separate approach: prepend via shift
+      // (xlsx aoa_to_sheet doesn't support merges natively here, keep it simple)
+
+      // ── Create workbook ───────────────────────────────────────────────
+      const wb = XLSX.utils.book_new();
+
+      // Sheet name: safe truncation
+      const sheetLabel = `${dateFrom} sd ${dateTo}`.replace(/[:\\\/\?\*\[\]]/g, "-").slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, sheetLabel);
+
+      // ── Set print options ─────────────────────────────────────────────
+      ws["!autofilter"] = { ref: `A1:G1` };
+
+      // ── Download ──────────────────────────────────────────────────────
+      const fileName = `retur_${dateFrom}_sd_${dateTo}.xlsx`;
+      XLSX.writeFile(wb, fileName, { bookType: "xlsx", type: "binary", cellStyles: true });
+    } finally {
+      setExporting(false);
+    }
+  }, [displayRows, expStats, dateFrom, dateTo]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -415,8 +530,11 @@ export default function DataPage() {
             </div>
 
             {/* Export */}
-            <button onClick={exportCSV} className="btn-secondary">
-              <Download className="w-4 h-4" /> Export CSV
+            <button onClick={exportExcel} disabled={exporting} className="btn-secondary">
+              {exporting
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Download className="w-4 h-4" />}
+              Export Excel
             </button>
           </div>
         )}
