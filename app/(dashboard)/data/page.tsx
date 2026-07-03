@@ -17,6 +17,7 @@ import {
   Check,
   X,
   AlertCircle,
+  AlertTriangle,
   FileSpreadsheet,
   RefreshCw,
 } from "lucide-react";
@@ -53,6 +54,40 @@ const EXP_COLORS = [
   "bg-rose-100 text-rose-800",
 ];
 
+// ── Anomaly detection ────────────────────────────────────────────────────────
+
+/** Minimum resi count per expedisi to establish a length pattern. */
+const MIN_GROUP = 3;
+/** Flag resi if its length differs from the mode by at least this many chars. */
+const ANOMALY_THRESHOLD = 2;
+
+interface LengthStats {
+  modeLength: number; // most common resi character count for this expedisi
+  modeCount:  number; // how many resi share that length
+  total:      number; // total resi in the group
+}
+
+function computeLengthStats(rows: SheetRow[]): Map<string, LengthStats> {
+  const groups = new Map<string, number[]>();
+  for (const row of rows) {
+    const len = row.kodeResi.trim().length;
+    if (!len) continue;
+    if (!groups.has(row.expedisiCode)) groups.set(row.expedisiCode, []);
+    groups.get(row.expedisiCode)!.push(len);
+  }
+  const stats = new Map<string, LengthStats>();
+  for (const [code, lengths] of groups) {
+    const counts = new Map<number, number>();
+    for (const l of lengths) counts.set(l, (counts.get(l) ?? 0) + 1);
+    let modeLength = 0, modeCount = 0;
+    for (const [l, c] of counts) {
+      if (c > modeCount) { modeCount = c; modeLength = l; }
+    }
+    stats.set(code, { modeLength, modeCount, total: lengths.length });
+  }
+  return stats;
+}
+
 export default function DataPage() {
   const { appUser } = useAuth();
   const today = todayString();
@@ -69,6 +104,7 @@ export default function DataPage() {
   const [loading, setLoading]             = useState(false);
   const [rows, setRows]                   = useState<SheetRow[]>([]);
   const [error, setError]                 = useState("");
+  const [viewMode, setViewMode]           = useState<"normal" | "anomaly">("normal");
 
   // Inline edit
   const [editCell, setEditCell]           = useState<{ idx: number; field: string } | null>(null);
@@ -177,19 +213,47 @@ export default function DataPage() {
     return r;
   }, [rows, karungFilter, searchText]);
 
-  const displayRows: DisplayRow[] = useMemo(
-    () => filteredRows.map((r, i) => ({ ...r, displayNo: i + 1 })),
-    [filteredRows]
-  );
+  // Anomaly detection — computed from ALL loaded rows for accurate mode per expedisi
+  const lengthStatsMap = useMemo(() => computeLengthStats(rows), [rows]);
 
-  // Per-expedisi stats for summary bar
+  const anomalyRows = useMemo(() =>
+    rows.filter((r) => {
+      const stats = lengthStatsMap.get(r.expedisiCode);
+      // Skip groups with too few rows to establish a reliable pattern
+      if (!stats || stats.total < MIN_GROUP) return false;
+      return Math.abs(r.kodeResi.trim().length - stats.modeLength) >= ANOMALY_THRESHOLD;
+    }),
+  [rows, lengthStatsMap]);
+
+  // Anomaly rows after karung/search client-side filters
+  const filteredAnomalyRows = useMemo(() => {
+    let r = anomalyRows;
+    if (karungFilter.size > 0) r = r.filter((row) => karungFilter.has(row.noKarung));
+    if (searchText.trim()) {
+      const q = searchText.trim().toUpperCase();
+      r = r.filter(
+        (row) =>
+          row.kodeResi.toUpperCase().includes(q) ||
+          row.noKarung.includes(q) ||
+          row.diScanOleh.toUpperCase().includes(q)
+      );
+    }
+    return r;
+  }, [anomalyRows, karungFilter, searchText]);
+
+  const displayRows: DisplayRow[] = useMemo(() => {
+    const source = viewMode === "anomaly" ? filteredAnomalyRows : filteredRows;
+    return source.map((r, i) => ({ ...r, displayNo: i + 1 }));
+  }, [viewMode, filteredAnomalyRows, filteredRows]);
+
+  // Per-expedisi stats for summary bar — always reflects current view
   const expStats = useMemo(() => {
     const map: Record<string, number> = {};
-    filteredRows.forEach((r) => {
+    displayRows.forEach((r) => {
       map[r.expedisiCode] = (map[r.expedisiCode] ?? 0) + 1;
     });
     return map;
-  }, [filteredRows]);
+  }, [displayRows]);
 
   // ── Inline edit ──────────────────────────────────────────────────────────
   const startEdit = (idx: number, field: string, val: string) => {
@@ -535,18 +599,40 @@ export default function DataPage() {
           </div>
 
           <button
-            onClick={fetchData}
+            onClick={() => { setViewMode("normal"); fetchData(); }}
             disabled={loading}
-            className="btn-primary"
+            className={cn("btn-primary", viewMode === "normal" && rows.length > 0 && "ring-2 ring-green-400 ring-offset-1")}
           >
-            {loading
+            {loading && viewMode === "normal"
               ? <Loader2 className="w-4 h-4 animate-spin" />
               : <Search className="w-4 h-4" />}
             Tampilkan
           </button>
 
+          <button
+            onClick={() => { setViewMode("anomaly"); fetchData(); }}
+            disabled={loading}
+            className={cn(
+              "btn-secondary flex items-center gap-1.5",
+              viewMode === "anomaly" && rows.length > 0
+                ? "bg-amber-500 text-white border-amber-500 hover:bg-amber-600"
+                : "border-amber-400 text-amber-700 hover:bg-amber-50"
+            )}
+            title="Tampilkan resi yang panjangnya menyimpang dari pola umum tiap expedisi"
+          >
+            {loading && viewMode === "anomaly"
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <AlertTriangle className="w-4 h-4" />}
+            Tampilkan Anomali
+          </button>
+
           {rows.length > 0 && (
-            <button onClick={fetchData} disabled={loading} className="btn-secondary" title="Refresh data">
+            <button
+              onClick={() => { fetchData(); }}
+              disabled={loading}
+              className="btn-secondary"
+              title="Refresh data"
+            >
               <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
             </button>
           )}
@@ -658,14 +744,44 @@ export default function DataPage() {
         </div>
       )}
 
+      {/* Anomaly mode banner */}
+      {viewMode === "anomaly" && rows.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-500" />
+          <div className="flex-1">
+            <p className="font-semibold">Mode: Tampilkan Anomali Resi</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Menampilkan resi yang panjang karakternya menyimpang ≥{ANOMALY_THRESHOLD} karakter dari pola umum tiap expedisi.
+              {anomalyRows.length === 0
+                ? " Tidak ada anomali yang ditemukan."
+                : ` Ditemukan ${anomalyRows.length} resi anomali dari ${rows.length} total.`}
+              {Array.from(lengthStatsMap.entries())
+                .filter(([, s]) => s.total >= MIN_GROUP)
+                .map(([code, s]) => ` ${code}: pola umum ${s.modeLength} karakter (${s.modeCount}/${s.total} resi).`)
+                .join("")}
+            </p>
+          </div>
+          <button
+            onClick={() => setViewMode("normal")}
+            className="text-amber-500 hover:text-amber-700 flex-shrink-0"
+            title="Kembali ke tampilan normal"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Summary chips */}
       {displayRows.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-slate-700">
             {displayRows.length} resi
-            {displayRows.length !== rows.length && (
-              <span className="text-slate-400 font-normal"> (dari {rows.length} total)</span>
-            )}
+            {viewMode === "anomaly"
+              ? <span className="text-amber-600 font-normal"> anomali</span>
+              : displayRows.length !== rows.length && (
+                  <span className="text-slate-400 font-normal"> (dari {rows.length} total)</span>
+                )
+            }
           </span>
           {Object.entries(expStats)
             .sort((a, b) => b[1] - a[1])
@@ -695,6 +811,9 @@ export default function DataPage() {
                   <th className="px-3 py-3 text-center w-10">No.</th>
                   <th className="px-3 py-3 text-left w-24">Expedisi</th>
                   <th className="px-3 py-3 text-left">Kode Resi</th>
+                  {viewMode === "anomaly" && (
+                    <th className="px-3 py-3 text-center w-32 bg-amber-700">Panjang Karakter</th>
+                  )}
                   <th className="px-3 py-3 text-center w-24">No. Karung</th>
                   <th className="px-3 py-3 text-left">Di Scan Oleh</th>
                   <th className="px-3 py-3 text-center w-28">Tanggal</th>
@@ -753,6 +872,30 @@ export default function DataPage() {
                           </span>
                         )}
                       </td>
+
+                      {/* Anomaly: length vs expected */}
+                      {viewMode === "anomaly" && (() => {
+                        const stats  = lengthStatsMap.get(row.expedisiCode);
+                        const actual = row.kodeResi.trim().length;
+                        const mode   = stats?.modeLength ?? 0;
+                        const diff   = actual - mode;
+                        const short  = diff < 0;
+                        return (
+                          <td className="px-3 py-2 text-center">
+                            <span className={cn(
+                              "inline-flex flex-col items-center px-2 py-1 rounded text-xs font-medium leading-tight",
+                              short
+                                ? "bg-red-100 text-red-700"
+                                : "bg-orange-100 text-orange-700"
+                            )}>
+                              <span className="font-bold">{actual} kar</span>
+                              <span className="opacity-75">
+                                {short ? `↓${Math.abs(diff)}` : `↑${diff}`} (pola: {mode})
+                              </span>
+                            </span>
+                          </td>
+                        );
+                      })()}
 
                       {/* No. Karung — double-click to edit (admin only) */}
                       <td className="px-3 py-2 text-center text-slate-600">
@@ -834,7 +977,12 @@ export default function DataPage() {
 
           {/* Table footer */}
           <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50 flex justify-between items-center text-xs text-slate-400">
-            <span>Total {displayRows.length} resi ditampilkan</span>
+            <span>
+              {viewMode === "anomaly"
+                ? <span className="text-amber-600 font-medium">⚠ {displayRows.length} resi anomali dari {rows.length} total</span>
+                : `Total ${displayRows.length} resi ditampilkan`
+              }
+            </span>
             {isAdmin && (
               <span>
                 Double-click <strong>Kode Resi</strong> / <strong>No. Karung</strong> untuk edit ·{" "}
@@ -846,9 +994,21 @@ export default function DataPage() {
       ) : !loading && !error ? (
         /* Empty state */
         <div className="card p-16 text-center">
-          <FileSpreadsheet className="w-14 h-14 mx-auto mb-4 text-slate-200" />
-          <p className="font-semibold text-slate-500">Pilih tanggal dan klik Tampilkan</p>
-          <p className="text-sm text-slate-400 mt-1">Data akan diambil langsung dari Google Sheets</p>
+          {viewMode === "anomaly" && rows.length > 0 ? (
+            <>
+              <AlertTriangle className="w-14 h-14 mx-auto mb-4 text-amber-200" />
+              <p className="font-semibold text-slate-500">Tidak ada resi anomali ditemukan</p>
+              <p className="text-sm text-slate-400 mt-1">
+                Semua resi panjang karakternya konsisten dengan pola tiap expedisi (toleransi ±{ANOMALY_THRESHOLD - 1} karakter)
+              </p>
+            </>
+          ) : (
+            <>
+              <FileSpreadsheet className="w-14 h-14 mx-auto mb-4 text-slate-200" />
+              <p className="font-semibold text-slate-500">Pilih tanggal dan klik Tampilkan</p>
+              <p className="text-sm text-slate-400 mt-1">Data akan diambil langsung dari Google Sheets</p>
+            </>
+          )}
         </div>
       ) : null}
     </div>
