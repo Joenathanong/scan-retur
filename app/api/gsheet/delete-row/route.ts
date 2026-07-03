@@ -72,7 +72,28 @@ export async function DELETE(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ success: true });
+    // Re-number column A from row 2 downward so the sequence stays continuous.
+    // Read column A after deletion to know how many data rows remain.
+    const colA = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `'${sheetName}'!A:A`,
+    });
+    const colAValues = colA.data.values || [];
+    // Row 0 = header; count rows that currently have any value in column A (data rows)
+    const dataRowCount = colAValues.length > 1 ? colAValues.length - 1 : 0;
+
+    if (dataRowCount > 0) {
+      // Build sequential numbers [[1],[2],...,[n]]
+      const newNumbers = Array.from({ length: dataRowCount }, (_, i) => [i + 1]);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${sheetName}'!A2:A${dataRowCount + 1}`,
+        valueInputOption: "RAW",
+        requestBody: { values: newNumbers },
+      });
+    }
+
+    return NextResponse.json({ success: true, remainingRows: dataRowCount });
   } catch (err) {
     console.error("GSheet delete-row error:", err);
     return NextResponse.json(
