@@ -13,6 +13,7 @@ import {
   Filter,
   ChevronDown,
   Edit2,
+  Trash2,
   Check,
   X,
   AlertCircle,
@@ -74,6 +75,11 @@ export default function DataPage() {
   const [editValue, setEditValue]         = useState("");
   const [saving, setSaving]               = useState(false);
   const [saveError, setSaveError]         = useState("");
+
+  // Delete resi
+  const [deleteConfirmRow, setDeleteConfirmRow] = useState<string | null>(null);
+  const [deletingRow, setDeletingRow]           = useState<string | null>(null);
+  const [deleteError, setDeleteError]           = useState("");
 
   const isAdmin = appUser?.role === "admin";
   const expDropRef = useRef<HTMLDivElement>(null);
@@ -233,6 +239,44 @@ export default function DataPage() {
       setSaveError(String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── Delete resi ──────────────────────────────────────────────────────────
+  const handleDeleteRow = async (row: DisplayRow) => {
+    if (!settings?.spreadsheetId) return;
+    const rowKey = `${row.sheetName}-${row.gsheetRow}`;
+    setDeletingRow(rowKey);
+    setDeleteError("");
+    try {
+      const res = await fetch("/api/gsheet/delete-row", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          spreadsheetId: settings.spreadsheetId,
+          sheetName:     row.sheetName,
+          gsheetRow:     row.gsheetRow,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || "Hapus gagal");
+      }
+      // Remove row and adjust gsheetRow numbers for rows below it in the same tab
+      setRows((prev) =>
+        prev
+          .filter((r) => !(r.sheetName === row.sheetName && r.gsheetRow === row.gsheetRow))
+          .map((r) =>
+            r.sheetName === row.sheetName && r.gsheetRow > row.gsheetRow
+              ? { ...r, gsheetRow: r.gsheetRow - 1 }
+              : r
+          )
+      );
+      setDeleteConfirmRow(null);
+    } catch (err) {
+      setDeleteError(String(err));
+    } finally {
+      setDeletingRow(null);
     }
   };
 
@@ -603,6 +647,17 @@ export default function DataPage() {
         </div>
       )}
 
+      {/* Delete error */}
+      {deleteError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1">{deleteError}</span>
+          <button onClick={() => setDeleteError("")} className="text-red-400 hover:text-red-600">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Summary chips */}
       {displayRows.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -644,7 +699,7 @@ export default function DataPage() {
                   <th className="px-3 py-3 text-left">Di Scan Oleh</th>
                   <th className="px-3 py-3 text-center w-28">Tanggal</th>
                   <th className="px-3 py-3 text-center w-20">Jam</th>
-                  {isAdmin && <th className="px-2 py-3 w-10"></th>}
+                  {isAdmin && <th className="px-2 py-3 w-16"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -725,16 +780,49 @@ export default function DataPage() {
                       <td className="px-3 py-2 text-center text-slate-400 text-xs tabular-nums">{row.tanggal}</td>
                       <td className="px-3 py-2 text-center text-slate-400 text-xs tabular-nums">{row.jam}</td>
 
-                      {/* Edit icon button (admin only) */}
+                      {/* Edit + Delete buttons (admin only) */}
                       {isAdmin && (
                         <td className="px-2 py-2">
-                          <button
-                            onClick={() => startEdit(idx, "kodeResi", row.kodeResi)}
-                            className="p-1.5 rounded text-slate-300 hover:text-green-600 hover:bg-green-50 transition-colors"
-                            title="Edit kode resi"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
+                          {deleteConfirmRow === rowKey ? (
+                            <div className="flex items-center gap-0.5">
+                              <span className="text-xs text-red-600 mr-0.5 whitespace-nowrap">Hapus?</span>
+                              <button
+                                onClick={() => handleDeleteRow(row)}
+                                disabled={deletingRow === rowKey}
+                                className="p-1 rounded text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                                title="Konfirmasi hapus"
+                              >
+                                {deletingRow === rowKey
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <Check className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirmRow(null)}
+                                disabled={deletingRow === rowKey}
+                                className="p-1 rounded text-slate-400 hover:bg-slate-100 transition-colors"
+                                title="Batal"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-0.5">
+                              <button
+                                onClick={() => startEdit(idx, "kodeResi", row.kodeResi)}
+                                className="p-1.5 rounded text-slate-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                                title="Edit kode resi"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => { setDeleteConfirmRow(rowKey); setEditCell(null); }}
+                                className="p-1.5 rounded text-slate-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                title="Hapus baris ini dari Google Sheets"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -748,7 +836,10 @@ export default function DataPage() {
           <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50 flex justify-between items-center text-xs text-slate-400">
             <span>Total {displayRows.length} resi ditampilkan</span>
             {isAdmin && (
-              <span>Double-click kolom <strong>Kode Resi</strong> atau <strong>No. Karung</strong> untuk edit langsung</span>
+              <span>
+                Double-click <strong>Kode Resi</strong> / <strong>No. Karung</strong> untuk edit ·{" "}
+                <span className="text-red-400">🗑</span> untuk hapus baris dari Google Sheets
+              </span>
             )}
           </div>
         </div>

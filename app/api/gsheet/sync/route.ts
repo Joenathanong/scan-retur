@@ -101,23 +101,35 @@ async function ensureSheet(
   }
 }
 
-async function getNextRowNumber(
+/**
+ * Check if noResi already exists in column B, and get the next row number.
+ * Reads A:B in one API call to avoid double-writes (idempotency).
+ */
+async function checkAndGetNextRow(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,
-  sheetName: string
-): Promise<number> {
+  sheetName: string,
+  noResi: string
+): Promise<{ exists: boolean; nextRowNo: number }> {
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `'${sheetName}'!A:A`,
+      range: `'${sheetName}'!A:B`,
     });
     const rows = res.data.values || [];
-    // Row 1 is header, so data starts at row 2.
-    // The "No." in column A for data rows is numeric.
+    const needle = noResi.toUpperCase().trim();
+
+    for (const row of rows) {
+      if (row[1] && String(row[1]).toUpperCase().trim() === needle) {
+        return { exists: true, nextRowNo: 0 };
+      }
+    }
+
+    // Count numeric rows in column A for the next sequence number
     const dataRows = rows.filter((r) => r[0] && !isNaN(Number(r[0])));
-    return dataRows.length + 1;
+    return { exists: false, nextRowNo: dataRows.length + 1 };
   } catch {
-    return 1;
+    return { exists: false, nextRowNo: 1 };
   }
 }
 
@@ -151,7 +163,15 @@ export async function POST(req: NextRequest) {
     const sheetName = sheetTabName(expedisiCode, date);
     await ensureSheet(sheets, spreadsheetId, sheetName);
 
-    const rowNo = await getNextRowNumber(sheets, spreadsheetId, sheetName);
+    // Idempotency check: skip if noResi already exists in the sheet
+    const { exists, nextRowNo: rowNo } = await checkAndGetNextRow(
+      sheets, spreadsheetId, sheetName, noResi
+    );
+    if (exists) {
+      console.log(`GSheet sync: resi ${noResi} already in ${sheetName}, skipping.`);
+      return NextResponse.json({ success: true, skipped: true });
+    }
+
     const scanDate = sheetDateName(date);
     // scannedAt sudah berupa "HH:mm:ss" (diformat di client = timezone lokal user/WIB)
     const scanTime = scannedAt;
