@@ -485,7 +485,7 @@ export async function getAuditLogs(limitCount = 100): Promise<AuditLog[]> {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLog));
 }
 
-// ── Claim config (settings/claim) ─────────────────────────────────────────
+// Claim config (settings/claim)
 
 const CLAIM_DOC = "settings/claim";
 

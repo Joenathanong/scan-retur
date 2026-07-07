@@ -228,8 +228,7 @@ export async function getTabDataCount(
   } catch { return 0; }
 }
 
-// ── Append rows to a tab ──────────────────────────────────────────────────
-
+// Append rows to a tab
 export async function appendClaimRows(
   sheets: ReturnType<typeof google.sheets>,
   spreadsheetId: string,

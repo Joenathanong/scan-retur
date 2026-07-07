@@ -15,37 +15,20 @@ import {
 /**
  * POST /api/claim/upload
  *
- * Terima rows dari client (hasil parse Excel), proses ke:
- *   1. Master spreadsheet → tab "ALL" (semua data)
- *   2. Expedisi spreadsheets → masing-masing 1 file terpisah
- *      - Jika spreadsheet expedisi belum ada → auto-create + share
- *
- * Body JSON:
- *   masterSpreadsheetId  — ID master G-Sheet (semua data)
- *   expedisiSheets       — { [code]: spreadsheetId } yang sudah ada
- *   rows                 — array ParsedRow dari client
- *
- * Response JSON:
- *   added               — jumlah baris baru
- *   skipped             — jumlah baris duplikat dilewati
- *   total               — total baris di Excel
- *   expedisiSummary     — { [code]: jumlah baris baru }
- *   newSheets           — { [code]: { spreadsheetId, url } } yang baru dibuat
+ * Body: { masterSpreadsheetId, expedisiSheets, rows }
+ * Response: { added, skipped, total, expedisiSummary, newSheets }
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
       masterSpreadsheetId,
-      expedisiSheets = {},   // Record<string, string> — code → spreadsheetId
+      expedisiSheets = {},
       rows: incoming = [],
     } = body;
 
     if (!masterSpreadsheetId) {
-      return NextResponse.json(
-        { error: "masterSpreadsheetId wajib diisi" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "masterSpreadsheetId wajib diisi" }, { status: 400 });
     }
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return NextResponse.json({ error: "rows tidak boleh kosong" }, { status: 400 });
@@ -54,13 +37,13 @@ export async function POST(req: NextRequest) {
     const auth   = getClaimAuth();
     const sheets = google.sheets({ version: "v4", auth });
 
-    // ── 1. Pastikan tab ALL di master sheet ada ──────────────────────────
+    // 1. Pastikan tab ALL di master sheet ada
     await ensureClaimTab(sheets, masterSpreadsheetId, "ALL");
 
-    // ── 2. Baca existing keys dari master ALL ────────────────────────────
+    // 2. Baca existing keys dari master ALL
     const existingKeys = await readExistingKeys(sheets, masterSpreadsheetId);
 
-    // ── 3. Detect expedisi + filter duplikat ────────────────────────────
+    // 3. Detect expedisi + filter duplikat
     const processed: ClaimRow[] = (incoming as Partial<ClaimRow>[]).map((r) => ({
       noResi:      String(r.noResi      ?? "").trim(),
       barcode:     String(r.barcode     ?? "").trim(),
@@ -95,23 +78,23 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── 4. Append ke master ALL ──────────────────────────────────────────
+    // 4. Append ke master ALL
     const masterCount = await getTabDataCount(sheets, masterSpreadsheetId, "ALL");
     await appendClaimRows(sheets, masterSpreadsheetId, "ALL", newRows, masterCount + 1);
 
-    // ── 5. Group by expedisi ─────────────────────────────────────────────
+    // 5. Group by expedisi
     const byExpedisi = new Map<string, ClaimRow[]>();
     for (const row of newRows) {
       if (!byExpedisi.has(row.expedisi)) byExpedisi.set(row.expedisi, []);
       byExpedisi.get(row.expedisi)!.push(row);
     }
 
-    // ── 6. Tulis ke tiap expedisi sheet (create jika belum ada) ──────────
+    // 6. Tulis ke tiap expedisi sheet (create jika belum ada)
     const expedisiSummary: Record<string, number>                                 = {};
     const newSheets:       Record<string, { spreadsheetId: string; url: string }> = {};
 
     for (const [expCode, rows] of byExpedisi) {
-      let expSheetId: string = expedisiSheets[expCode] ?? "";
+      let expSheetId: string = (expedisiSheets as Record<string, string>)[expCode] ?? "";
 
       if (!expSheetId) {
         const created = await createExpedisiSpreadsheet(sheets, expCode);
@@ -135,13 +118,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("Claim upload error:", err);
-    return NextResponse.json(
-      { error: "Upload gagal", detail: String(err) },
-      { status: 500 }
-    );
-  }
-}
-ror:", err);
     return NextResponse.json(
       { error: "Upload gagal", detail: String(err) },
       { status: 500 }
