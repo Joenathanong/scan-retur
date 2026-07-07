@@ -1111,9 +1111,3 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
     </div>
   );
 }
-</p>
-        </div>
-      ) : null}
-    </div>
-  );
-}
