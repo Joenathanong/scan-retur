@@ -215,7 +215,7 @@ function ConfigSection({
 
   useEffect(() => { setMasterInput(config.masterSpreadsheetId); }, [config.masterSpreadsheetId]);
 
-  const expedisiEntries = Object.entries(config.expedisiSheets).sort((a, b) =>
+  const expedisiEntries = Object.entries(config.expedisiSheets ?? {}).sort((a, b) =>
     a[0].localeCompare(b[0])
   );
 
@@ -494,7 +494,7 @@ function UploadTab({
     setUploading(true); setError(""); setResult(null);
     try {
       const expedisiSheets: Record<string, string> = {};
-      for (const [code, sheet] of Object.entries(config.expedisiSheets)) {
+      for (const [code, sheet] of Object.entries(config.expedisiSheets ?? {})) {
         expedisiSheets[code] = sheet.spreadsheetId;
       }
       const res  = await fetch("/api/claim/upload", {
@@ -692,7 +692,7 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
     if (config.masterSpreadsheetId) {
       list.push({ label: "Master (Semua Data)", spreadsheetId: config.masterSpreadsheetId, tab: "ALL" });
     }
-    for (const [code, sheet] of Object.entries(config.expedisiSheets).sort()) {
+    for (const [code, sheet] of Object.entries(config.expedisiSheets ?? {}).sort()) {
       list.push({ label: `Expedisi: ${code}`, spreadsheetId: sheet.spreadsheetId, tab: code });
     }
     return list;

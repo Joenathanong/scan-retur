@@ -491,7 +491,13 @@ const CLAIM_DOC = "settings/claim";
 
 export async function getClaimConfig(): Promise<ClaimSheetConfig> {
   const snap = await getDoc(doc(db, CLAIM_DOC));
-  if (snap.exists()) return snap.data() as ClaimSheetConfig;
+  if (snap.exists()) {
+    const d = snap.data();
+    return {
+      masterSpreadsheetId: d.masterSpreadsheetId ?? "",
+      expedisiSheets:      d.expedisiSheets      ?? {},
+    };
+  }
   return { masterSpreadsheetId: "", expedisiSheets: {} };
 }
 
