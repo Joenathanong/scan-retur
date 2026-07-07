@@ -450,7 +450,7 @@ function ConfigSection({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UPLOAD TAB
+// UPLOAD TAB  (parsing dilakukan di server untuk mendukung file besar)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function UploadTab({
@@ -461,51 +461,40 @@ function UploadTab({
   onNewSheets: (s: Record<string, { spreadsheetId: string; url: string }>) => Promise<void>;
 }) {
   const [file, setFile]           = useState<File | null>(null);
-  const [allRows, setAllRows]     = useState<ParsedRow[]>([]);
-  const [preview, setPreview]     = useState<ParsedRow[]>([]);
-  const [parsing, setParsing]     = useState(false);
   const [uploading, setUploading] = useState(false);
   const [result, setResult]       = useState<{
     added: number; skipped: number; total: number;
     expedisiSummary: Record<string, number>;
     newSheets: Record<string, { spreadsheetId: string; url: string }>;
   } | null>(null);
-  const [error, setError]   = useState("");
-  const fileInputRef        = useState<HTMLInputElement | null>(null);
+  const [error, setError] = useState("");
 
-  const handleFile = async (f: File) => {
-    setFile(f); setResult(null); setError("");
-    setParsing(true);
-    try {
-      const rows = await parseExcel(f);
-      setAllRows(rows);
-      setPreview(rows.slice(0, 10));
-    } catch (e) {
-      setError("Gagal membaca file: " + String(e));
-    } finally { setParsing(false); }
+  const handleFile = (f: File) => {
+    setFile(f);
+    setResult(null);
+    setError("");
   };
 
   const handleUpload = async () => {
+    if (!file) return;
     if (!config.masterSpreadsheetId) {
       setError("Konfigurasi Master Spreadsheet ID terlebih dahulu.");
       return;
     }
-    if (allRows.length === 0) return;
     setUploading(true); setError(""); setResult(null);
     try {
       const expedisiSheets: Record<string, string> = {};
       for (const [code, sheet] of Object.entries(config.expedisiSheets ?? {})) {
         expedisiSheets[code] = sheet.spreadsheetId;
       }
-      const res  = await fetch("/api/claim/upload", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          masterSpreadsheetId: config.masterSpreadsheetId,
-          expedisiSheets,
-          rows: allRows,
-        }),
-      });
+
+      // Kirim file mentah ke server — server yang parse Excel
+      const fd = new FormData();
+      fd.append("file",                file);
+      fd.append("masterSpreadsheetId", config.masterSpreadsheetId);
+      fd.append("expedisiSheets",      JSON.stringify(expedisiSheets));
+
+      const res  = await fetch("/api/claim/upload", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload gagal");
       setResult(data);
@@ -534,19 +523,16 @@ function UploadTab({
           type="file"
           accept=".xlsx,.xls"
           className="hidden"
-          ref={(el) => { fileInputRef[1](el); }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
         />
-        {parsing
-          ? <Loader2 className="w-10 h-10 mx-auto mb-3 text-green-500 animate-spin" />
-          : file
-            ? <FileSpreadsheet className="w-10 h-10 mx-auto mb-3 text-green-600" />
-            : <Upload className="w-10 h-10 mx-auto mb-3 text-slate-300" />}
+        {file
+          ? <FileSpreadsheet className="w-10 h-10 mx-auto mb-3 text-green-600" />
+          : <Upload className="w-10 h-10 mx-auto mb-3 text-slate-300" />}
         {file ? (
           <>
             <p className="font-semibold text-slate-700">{file.name}</p>
             <p className="text-sm text-slate-400 mt-1">
-              {allRows.length} baris valid · klik untuk ganti
+              {(file.size / 1024 / 1024).toFixed(1)} MB — klik untuk ganti file
             </p>
           </>
         ) : (
@@ -556,6 +542,23 @@ function UploadTab({
           </>
         )}
       </label>
+
+      {/* Upload button */}
+      {file && !result && (
+        <div className="flex justify-end">
+          <button
+            onClick={handleUpload}
+            disabled={uploading || !config.masterSpreadsheetId}
+            className="btn-primary"
+            title={!config.masterSpreadsheetId ? "Konfigurasi Master Spreadsheet ID dulu" : undefined}
+          >
+            {uploading
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Upload className="w-4 h-4" />}
+            {uploading ? "Memproses... (mohon tunggu)" : "Proses & Simpan"}
+          </button>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -576,10 +579,10 @@ function UploadTab({
             {[
               { val: result.added,   label: "Baris ditambahkan",    cls: "text-green-600" },
               { val: result.skipped, label: "Sudah ada (dilewati)", cls: "text-slate-400" },
-              { val: result.total,   label: "Total baris Excel",     cls: "text-slate-600" },
+              { val: result.total,   label: "Total baris di file",   cls: "text-slate-600" },
             ].map(({ val, label, cls }) => (
               <div key={label} className="bg-white rounded-xl p-3 border border-slate-100">
-                <p className={cn("text-2xl font-bold", cls)}>{val}</p>
+                <p className={cn("text-2xl font-bold", cls)}>{val.toLocaleString("id-ID")}</p>
                 <p className="text-xs text-slate-500 mt-0.5">{label}</p>
               </div>
             ))}
@@ -593,7 +596,7 @@ function UploadTab({
                   .sort((a, b) => b[1] - a[1])
                   .map(([code, cnt]) => (
                     <span key={code} className={cn("px-2.5 py-1 rounded-full text-xs font-medium", expColor(code))}>
-                      {code}: {cnt} baris
+                      {code}: {cnt.toLocaleString("id-ID")} baris
                     </span>
                   ))}
               </div>
@@ -621,59 +624,13 @@ function UploadTab({
               </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* Preview + upload button */}
-      {preview.length > 0 && (
-        <div className="card overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-            <p className="font-semibold text-slate-700 text-sm">
-              Preview ({allRows.length} baris, menampilkan 10 pertama)
-            </p>
-            <button
-              onClick={handleUpload}
-              disabled={uploading || !config.masterSpreadsheetId}
-              className="btn-primary"
-              title={!config.masterSpreadsheetId ? "Konfigurasi Master Spreadsheet ID dulu" : undefined}
-            >
-              {uploading
-                ? <Loader2 className="w-4 h-4 animate-spin" />
-                : <Upload className="w-4 h-4" />}
-              {uploading ? "Memproses..." : `Proses & Simpan (${allRows.length} baris)`}
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-slate-800 text-white">
-                  {["No. Pesanan/Resi", "SKU", "Qty", "Kondisi", "Batch", "Exp. Date", "Created By", "Created Date"]
-                    .map((h) => (
-                      <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>
-                    ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {preview.map((r, i) => (
-                  <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
-                    <td className="px-3 py-2 font-mono font-semibold text-slate-800">{r.noResi}</td>
-                    <td className="px-3 py-2 font-mono text-slate-600">{r.sku}</td>
-                    <td className="px-3 py-2 text-center">{r.qty}</td>
-                    <td className="px-3 py-2">{r.kondisi}</td>
-                    <td className="px-3 py-2 font-mono text-slate-500">{r.batch}</td>
-                    <td className="px-3 py-2 text-slate-400">{r.expDate?.slice(0, 10)}</td>
-                    <td className="px-3 py-2 text-slate-500">{r.createdBy}</td>
-                    <td className="px-3 py-2 text-slate-400">{r.createdDate?.slice(0, 16)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {allRows.length > 10 && (
-            <div className="px-4 py-2 text-xs text-slate-400 border-t border-slate-100 bg-slate-50">
-              + {allRows.length - 10} baris lainnya
-            </div>
-          )}
+          <button
+            onClick={() => { setFile(null); setResult(null); }}
+            className="btn-secondary text-sm"
+          >
+            Upload file lain
+          </button>
         </div>
       )}
     </div>
