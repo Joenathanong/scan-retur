@@ -107,19 +107,17 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 6. Tulis ke tiap expedisi sheet (create jika belum ada) ──────────
-    const expedisiSummary: Record<string, number>                            = {};
+    const expedisiSummary: Record<string, number>                                 = {};
     const newSheets:       Record<string, { spreadsheetId: string; url: string }> = {};
 
     for (const [expCode, rows] of byExpedisi) {
       let expSheetId: string = expedisiSheets[expCode] ?? "";
 
       if (!expSheetId) {
-        // Auto-create spreadsheet baru untuk expedisi ini
         const created = await createExpedisiSpreadsheet(sheets, expCode);
         expSheetId = created.spreadsheetId;
         newSheets[expCode] = created;
       } else {
-        // Pastikan tab expedisi sudah ada
         await ensureClaimTab(sheets, expSheetId, expCode);
       }
 
@@ -133,10 +131,17 @@ export async function POST(req: NextRequest) {
       skipped,
       total:  incoming.length,
       expedisiSummary,
-      newSheets, // client akan simpan ke Firestore
+      newSheets,
     });
   } catch (err) {
     console.error("Claim upload error:", err);
+    return NextResponse.json(
+      { error: "Upload gagal", detail: String(err) },
+      { status: 500 }
+    );
+  }
+}
+ror:", err);
     return NextResponse.json(
       { error: "Upload gagal", detail: String(err) },
       { status: 500 }

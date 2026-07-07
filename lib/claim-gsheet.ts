@@ -67,23 +67,9 @@ export function getClaimAuth() {
 }
 
 // ── Expedisi detection ────────────────────────────────────────────────────
-
-export function detectExpedisi(noResi: string): string {
-  const r = String(noResi).toUpperCase().trim();
-  if (r.startsWith("SPXID"))  return "SPXID";
-  if (r.startsWith("TKP"))    return "TKP";
-  if (r.startsWith("GTL"))    return "GTL";
-  if (r.startsWith("JX"))     return "JX";
-  if (r.startsWith("JNE"))    return "JNE";
-  if (r.startsWith("SCP"))    return "SICEPAT";
-  if (r.startsWith("GRAB"))   return "GRAB";
-  if (r.startsWith("IDS"))    return "IDEXPRESS";
-  if (r.startsWith("REX"))    return "REX";
-  if (r.startsWith("SAP"))    return "SAP";
-  if (r.startsWith("NCS"))    return "NCS";
-  const m = r.match(/^([A-Z]+)/);
-  return m ? m[1] : "UNKNOWN";
-}
+// Re-export dari lib/expedisi-map.ts (pure data — bisa dipakai client & server)
+export { detectExpedisi, getPrefixesForExpedisi } from "./expedisi-map";
+// PREFIX_MAP digunakan secara internal di expedisi-map; tidak perlu di-export ulang
 
 // ── Dedup key ─────────────────────────────────────────────────────────────
 // 1 resi bisa punya banyak SKU (multi-line) → key = noResi + noItem

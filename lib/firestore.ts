@@ -485,24 +485,18 @@ export async function getAuditLogs(limitCount = 100): Promise<AuditLog[]> {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLog));
 }
 
-// ─── CLAIM SHEET CONFIG ────────────────────────────────────────────────────
-// Disimpan di Firestore: settings/claim
-// Struktur: { masterSpreadsheetId, expedisiSheets: { JX: { spreadsheetId, url }, ... } }
+// ── Claim config (settings/claim) ─────────────────────────────────────────
+
+const CLAIM_DOC = "settings/claim";
 
 export async function getClaimConfig(): Promise<ClaimSheetConfig> {
-  try {
-    const snap = await getDoc(doc(db, "settings", "claim"));
-    if (snap.exists()) return snap.data() as ClaimSheetConfig;
-  } catch { /* ignore */ }
+  const snap = await getDoc(doc(db, CLAIM_DOC));
+  if (snap.exists()) return snap.data() as ClaimSheetConfig;
   return { masterSpreadsheetId: "", expedisiSheets: {} };
 }
 
 export async function saveClaimMasterSheet(spreadsheetId: string): Promise<void> {
-  await setDoc(
-    doc(db, "settings", "claim"),
-    { masterSpreadsheetId: spreadsheetId },
-    { merge: true }
-  );
+  await setDoc(doc(db, CLAIM_DOC), { masterSpreadsheetId: spreadsheetId }, { merge: true });
 }
 
 export async function saveClaimExpedisiSheet(
@@ -510,7 +504,7 @@ export async function saveClaimExpedisiSheet(
   sheet: ClaimExpedisiSheet
 ): Promise<void> {
   await setDoc(
-    doc(db, "settings", "claim"),
+    doc(db, CLAIM_DOC),
     { expedisiSheets: { [code]: sheet } },
     { merge: true }
   );
@@ -519,9 +513,8 @@ export async function saveClaimExpedisiSheet(
 export async function saveClaimExpedisiSheets(
   sheets: Record<string, ClaimExpedisiSheet>
 ): Promise<void> {
-  if (Object.keys(sheets).length === 0) return;
   await setDoc(
-    doc(db, "settings", "claim"),
+    doc(db, CLAIM_DOC),
     { expedisiSheets: sheets },
     { merge: true }
   );

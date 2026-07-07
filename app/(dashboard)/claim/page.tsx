@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   getClaimConfig,
@@ -9,12 +9,13 @@ import {
   saveClaimExpedisiSheet,
 } from "@/lib/firestore";
 import { cn } from "@/lib/utils";
+import { getPrefixesForExpedisi } from "@/lib/expedisi-map";
 import type { ClaimSheetConfig, ClaimExpedisiSheet } from "@/types";
 import {
   Upload, FileSpreadsheet, Check, X, AlertCircle, Loader2,
-  Edit2, Trash2, Search, RefreshCw, Settings2, Database,
+  Edit2, Search, RefreshCw, Settings2, Database,
   Package, ExternalLink, ArrowUpDown, ChevronDown, ChevronUp,
-  Plus,
+  Plus, Trash2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -41,7 +42,7 @@ interface SheetRow extends ParsedRow {
 type TabSection = "upload" | "edit";
 type SortDir    = "asc" | "desc";
 
-// ─── Excel parser ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function parseExcel(file: File): Promise<ParsedRow[]> {
   const XLSX   = await import("xlsx");
@@ -71,8 +72,6 @@ function fmtDate(val: unknown): string {
   return isNaN(d.getTime()) ? String(val) : d.toISOString().slice(0, 19).replace("T", " ");
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const EXP_COLORS: Record<string, string> = {
   JX:        "bg-sky-100 text-sky-800",
   SPXID:     "bg-orange-100 text-orange-800",
@@ -82,6 +81,8 @@ const EXP_COLORS: Record<string, string> = {
   SICEPAT:   "bg-purple-100 text-purple-800",
   GRAB:      "bg-yellow-100 text-yellow-800",
   IDEXPRESS: "bg-pink-100 text-pink-800",
+  LION:      "bg-amber-100 text-amber-800",
+  NINJA:     "bg-indigo-100 text-indigo-800",
   ALL:       "bg-slate-100 text-slate-700",
 };
 const expColor = (c: string) => EXP_COLORS[c] ?? "bg-indigo-100 text-indigo-800";
@@ -101,7 +102,6 @@ export default function ClaimPage() {
   });
   const [configLoaded, setConfigLoaded] = useState(false);
 
-  // Load config from Firestore
   useEffect(() => {
     getClaimConfig().then((c) => { setConfig(c); setConfigLoaded(true); });
   }, []);
@@ -155,7 +155,7 @@ export default function ClaimPage() {
         </h1>
       </div>
 
-      {/* ── Konfigurasi G-Sheet ── */}
+      {/* Konfigurasi */}
       {configLoaded && (
         <ConfigSection
           config={config}
@@ -164,7 +164,7 @@ export default function ClaimPage() {
         />
       )}
 
-      {/* ── Tab switcher ── */}
+      {/* Tab switcher */}
       <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
         {(["upload", "edit"] as const).map((t) => (
           <button
@@ -172,7 +172,9 @@ export default function ClaimPage() {
             onClick={() => setSection(t)}
             className={cn(
               "px-5 py-2 rounded-lg text-sm font-medium transition-all",
-              section === t ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              section === t
+                ? "bg-white text-slate-900 shadow-sm"
+                : "text-slate-500 hover:text-slate-700"
             )}
           >
             {t === "upload"
@@ -182,12 +184,9 @@ export default function ClaimPage() {
         ))}
       </div>
 
-      {/* ── Content ── */}
-      {section === "upload" ? (
-        <UploadTab config={config} onNewSheets={handleNewSheets} />
-      ) : (
-        <EditTab config={config} />
-      )}
+      {section === "upload"
+        ? <UploadTab config={config} onNewSheets={handleNewSheets} />
+        : <EditTab config={config} />}
     </div>
   );
 }
@@ -205,14 +204,14 @@ function ConfigSection({
   onSaveMaster: (id: string) => Promise<void>;
   onSaveExpedisiId: (code: string, id: string) => Promise<void>;
 }) {
-  const [masterInput, setMasterInput]   = useState(config.masterSpreadsheetId);
-  const [saving, setSaving]             = useState(false);
-  const [editCode, setEditCode]         = useState<string | null>(null);
-  const [editInput, setEditInput]       = useState("");
-  const [savingCode, setSavingCode]     = useState<string | null>(null);
-  const [addMode, setAddMode]           = useState(false);
-  const [newCode, setNewCode]           = useState("");
-  const [newId, setNewId]               = useState("");
+  const [masterInput, setMasterInput] = useState(config.masterSpreadsheetId);
+  const [saving, setSaving]           = useState(false);
+  const [editCode, setEditCode]       = useState<string | null>(null);
+  const [editInput, setEditInput]     = useState("");
+  const [savingCode, setSavingCode]   = useState<string | null>(null);
+  const [addMode, setAddMode]         = useState(false);
+  const [newCode, setNewCode]         = useState("");
+  const [newId, setNewId]             = useState("");
 
   useEffect(() => { setMasterInput(config.masterSpreadsheetId); }, [config.masterSpreadsheetId]);
 
@@ -229,7 +228,8 @@ function ConfigSection({
       {/* Master sheet */}
       <div>
         <label className="text-xs text-slate-500 mb-1.5 block">
-          Master Spreadsheet <span className="text-slate-400">(semua data — tab ALL)</span>
+          Master Spreadsheet{" "}
+          <span className="text-slate-400">(semua data — tab ALL)</span>
         </label>
         <div className="flex gap-2 items-center">
           <input
@@ -240,11 +240,17 @@ function ConfigSection({
             className="input-field flex-1 font-mono text-xs"
           />
           <button
-            onClick={async () => { setSaving(true); await onSaveMaster(masterInput); setSaving(false); }}
+            onClick={async () => {
+              setSaving(true);
+              await onSaveMaster(masterInput);
+              setSaving(false);
+            }}
             disabled={saving || !masterInput.trim()}
             className="btn-primary flex-shrink-0"
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            {saving
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Check className="w-4 h-4" />}
             Simpan
           </button>
           {config.masterSpreadsheetId && (
@@ -260,7 +266,7 @@ function ConfigSection({
         </div>
         {!config.masterSpreadsheetId && (
           <p className="text-xs text-amber-600 mt-1.5">
-            ⚠ Buat Google Sheet baru → salin ID dari URL → tempel di sini
+            Buat Google Sheet baru, salin ID dari URL, tempel di sini
           </p>
         )}
       </div>
@@ -269,7 +275,8 @@ function ConfigSection({
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="text-xs text-slate-500">
-            Per-Expedisi Spreadsheets <span className="text-slate-400">(1 file G-Sheet per expedisi)</span>
+            Per-Expedisi Spreadsheets{" "}
+            <span className="text-slate-400">(1 file G-Sheet per expedisi)</span>
           </label>
           <button
             onClick={() => setAddMode((v) => !v)}
@@ -281,7 +288,7 @@ function ConfigSection({
 
         {expedisiEntries.length === 0 && !addMode ? (
           <p className="text-xs text-slate-400 italic py-2">
-            Belum ada — akan otomatis dibuat & dicatat saat pertama kali upload data.
+            Belum ada — akan otomatis dibuat saat pertama kali upload data.
           </p>
         ) : (
           <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -289,8 +296,9 @@ function ConfigSection({
               <thead>
                 <tr className="bg-slate-50 text-xs text-slate-500">
                   <th className="px-3 py-2 text-left w-24">Expedisi</th>
+                  <th className="px-3 py-2 text-left w-56">Prefix Resi Dikenali</th>
                   <th className="px-3 py-2 text-left">Spreadsheet ID</th>
-                  <th className="px-3 py-2 text-center w-32">Aksi</th>
+                  <th className="px-3 py-2 text-center w-24">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -300,6 +308,18 @@ function ConfigSection({
                       <span className={cn("px-2 py-0.5 rounded text-xs font-semibold", expColor(code))}>
                         {code}
                       </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        {getPrefixesForExpedisi(code).map((p) => (
+                          <span key={p} className="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-xs font-mono">
+                            {p}
+                          </span>
+                        ))}
+                        {getPrefixesForExpedisi(code).length === 0 && (
+                          <span className="text-xs text-slate-300 italic">—</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       {editCode === code ? (
@@ -320,14 +340,21 @@ function ConfigSection({
                             disabled={savingCode === code}
                             className="p-1 text-green-600 hover:bg-green-50 rounded"
                           >
-                            {savingCode === code ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            {savingCode === code
+                              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              : <Check className="w-3.5 h-3.5" />}
                           </button>
-                          <button onClick={() => setEditCode(null)} className="p-1 text-slate-400 hover:bg-slate-100 rounded">
+                          <button
+                            onClick={() => setEditCode(null)}
+                            className="p-1 text-slate-400 hover:bg-slate-100 rounded"
+                          >
                             <X className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       ) : (
-                        <span className="font-mono text-xs text-slate-600">{sheet.spreadsheetId}</span>
+                        <span className="font-mono text-xs text-slate-600">
+                          {sheet.spreadsheetId}
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-center">
@@ -353,7 +380,6 @@ function ConfigSection({
                   </tr>
                 ))}
 
-                {/* Add row manually */}
                 {addMode && (
                   <tr className="bg-green-50/50">
                     <td className="px-3 py-2">
@@ -364,6 +390,20 @@ function ConfigSection({
                         placeholder="Kode"
                         className="input-field py-1 w-20 text-xs font-mono"
                       />
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1 min-h-[20px]">
+                        {newCode && getPrefixesForExpedisi(newCode).map((p) => (
+                          <span key={p} className="px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-xs font-mono">
+                            {p}
+                          </span>
+                        ))}
+                        {newCode && getPrefixesForExpedisi(newCode).length === 0 && (
+                          <span className="text-xs text-amber-500 italic">
+                            Kode baru — prefix belum terdaftar
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2">
                       <input
@@ -386,7 +426,10 @@ function ConfigSection({
                         >
                           <Check className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={() => { setAddMode(false); setNewCode(""); setNewId(""); }} className="p-1.5 rounded text-slate-400 hover:bg-slate-100">
+                        <button
+                          onClick={() => { setAddMode(false); setNewCode(""); setNewId(""); }}
+                          className="p-1.5 rounded text-slate-400 hover:bg-slate-100"
+                        >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
@@ -398,7 +441,8 @@ function ConfigSection({
           </div>
         )}
         <p className="text-xs text-slate-400 mt-1.5">
-          Sheet expedisi dibuat otomatis saat upload. Link &quot;anyone with link&quot; dapat edit.
+          Sheet expedisi dibuat otomatis saat upload.
+          Link &quot;anyone with link&quot; dapat edit.
         </p>
       </div>
     </div>
@@ -414,7 +458,7 @@ function UploadTab({
   onNewSheets,
 }: {
   config: ClaimSheetConfig;
-  onNewSheets: (sheets: Record<string, { spreadsheetId: string; url: string }>) => Promise<void>;
+  onNewSheets: (s: Record<string, { spreadsheetId: string; url: string }>) => Promise<void>;
 }) {
   const [file, setFile]           = useState<File | null>(null);
   const [allRows, setAllRows]     = useState<ParsedRow[]>([]);
@@ -426,8 +470,8 @@ function UploadTab({
     expedisiSummary: Record<string, number>;
     newSheets: Record<string, { spreadsheetId: string; url: string }>;
   } | null>(null);
-  const [error, setError]         = useState("");
-  const fileRef                   = useRef<HTMLInputElement>(null);
+  const [error, setError]   = useState("");
+  const fileInputRef        = useState<HTMLInputElement | null>(null);
 
   const handleFile = async (f: File) => {
     setFile(f); setResult(null); setError("");
@@ -442,16 +486,17 @@ function UploadTab({
   };
 
   const handleUpload = async () => {
-    if (!config.masterSpreadsheetId) { setError("Konfigurasi Master Spreadsheet ID terlebih dahulu."); return; }
+    if (!config.masterSpreadsheetId) {
+      setError("Konfigurasi Master Spreadsheet ID terlebih dahulu.");
+      return;
+    }
     if (allRows.length === 0) return;
     setUploading(true); setError(""); setResult(null);
     try {
-      // Build expedisiSheets map: code → spreadsheetId
       const expedisiSheets: Record<string, string> = {};
       for (const [code, sheet] of Object.entries(config.expedisiSheets)) {
         expedisiSheets[code] = sheet.spreadsheetId;
       }
-
       const res  = await fetch("/api/claim/upload", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
@@ -463,10 +508,7 @@ function UploadTab({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Upload gagal");
-
       setResult(data);
-
-      // Simpan ID expedisi yang baru dibuat ke Firestore
       if (Object.keys(data.newSheets ?? {}).length > 0) {
         await onNewSheets(data.newSheets);
       }
@@ -478,17 +520,23 @@ function UploadTab({
   return (
     <div className="space-y-5">
       {/* Drop zone */}
-      <div
+      <label
         className={cn(
-          "card p-8 border-2 border-dashed text-center cursor-pointer transition-all",
-          file ? "border-green-400 bg-green-50/40" : "border-slate-200 hover:border-green-300 hover:bg-slate-50"
+          "card p-8 border-2 border-dashed text-center cursor-pointer block transition-all",
+          file
+            ? "border-green-400 bg-green-50/40"
+            : "border-slate-200 hover:border-green-300 hover:bg-slate-50"
         )}
-        onClick={() => fileRef.current?.click()}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
       >
-        <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          className="hidden"
+          ref={(el) => { fileInputRef[1](el); }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+        />
         {parsing
           ? <Loader2 className="w-10 h-10 mx-auto mb-3 text-green-500 animate-spin" />
           : file
@@ -497,7 +545,9 @@ function UploadTab({
         {file ? (
           <>
             <p className="font-semibold text-slate-700">{file.name}</p>
-            <p className="text-sm text-slate-400 mt-1">{allRows.length} baris valid · klik untuk ganti</p>
+            <p className="text-sm text-slate-400 mt-1">
+              {allRows.length} baris valid · klik untuk ganti
+            </p>
           </>
         ) : (
           <>
@@ -505,7 +555,7 @@ function UploadTab({
             <p className="text-sm text-slate-400 mt-1">Format: .xlsx atau .xls (ekspor dari Jubelio)</p>
           </>
         )}
-      </div>
+      </label>
 
       {/* Error */}
       {error && (
@@ -524,9 +574,9 @@ function UploadTab({
           </p>
           <div className="grid grid-cols-3 gap-3 text-center">
             {[
-              { val: result.added,   label: "Baris ditambahkan",   cls: "text-green-600" },
+              { val: result.added,   label: "Baris ditambahkan",    cls: "text-green-600" },
               { val: result.skipped, label: "Sudah ada (dilewati)", cls: "text-slate-400" },
-              { val: result.total,   label: "Total baris Excel",    cls: "text-slate-600" },
+              { val: result.total,   label: "Total baris Excel",     cls: "text-slate-600" },
             ].map(({ val, label, cls }) => (
               <div key={label} className="bg-white rounded-xl p-3 border border-slate-100">
                 <p className={cn("text-2xl font-bold", cls)}>{val}</p>
@@ -535,21 +585,21 @@ function UploadTab({
             ))}
           </div>
 
-          {/* Per-expedisi summary */}
           {Object.keys(result.expedisiSummary).length > 0 && (
             <div>
               <p className="text-xs text-green-700 font-medium mb-1.5">Baris baru per expedisi:</p>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(result.expedisiSummary).sort((a, b) => b[1] - a[1]).map(([code, cnt]) => (
-                  <span key={code} className={cn("px-2.5 py-1 rounded-full text-xs font-medium", expColor(code))}>
-                    {code}: {cnt} baris
-                  </span>
-                ))}
+                {Object.entries(result.expedisiSummary)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([code, cnt]) => (
+                    <span key={code} className={cn("px-2.5 py-1 rounded-full text-xs font-medium", expColor(code))}>
+                      {code}: {cnt} baris
+                    </span>
+                  ))}
               </div>
             </div>
           )}
 
-          {/* Newly created sheets */}
           {Object.keys(result.newSheets ?? {}).length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <p className="text-xs font-semibold text-amber-700 mb-1.5">
@@ -558,7 +608,9 @@ function UploadTab({
               <div className="space-y-1">
                 {Object.entries(result.newSheets).map(([code, s]) => (
                   <div key={code} className="flex items-center gap-2 text-xs">
-                    <span className={cn("px-1.5 py-0.5 rounded font-semibold", expColor(code))}>{code}</span>
+                    <span className={cn("px-1.5 py-0.5 rounded font-semibold", expColor(code))}>
+                      {code}
+                    </span>
                     <span className="font-mono text-slate-500 truncate flex-1">{s.spreadsheetId}</span>
                     <a href={s.url} target="_blank" rel="noopener noreferrer"
                       className="text-blue-600 hover:underline flex items-center gap-0.5">
@@ -572,7 +624,7 @@ function UploadTab({
         </div>
       )}
 
-      {/* Preview + process button */}
+      {/* Preview + upload button */}
       {preview.length > 0 && (
         <div className="card overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
@@ -585,7 +637,9 @@ function UploadTab({
               className="btn-primary"
               title={!config.masterSpreadsheetId ? "Konfigurasi Master Spreadsheet ID dulu" : undefined}
             >
-              {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {uploading
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : <Upload className="w-4 h-4" />}
               {uploading ? "Memproses..." : `Proses & Simpan (${allRows.length} baris)`}
             </button>
           </div>
@@ -593,9 +647,10 @@ function UploadTab({
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-800 text-white">
-                  {["No. Pesanan/Resi","SKU","Qty","Kondisi","Batch","Exp. Date","Created By","Created Date"].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>
-                  ))}
+                  {["No. Pesanan/Resi", "SKU", "Qty", "Kondisi", "Batch", "Exp. Date", "Created By", "Created Date"]
+                    .map((h) => (
+                      <th key={h} className="px-3 py-2 text-left whitespace-nowrap">{h}</th>
+                    ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -606,9 +661,9 @@ function UploadTab({
                     <td className="px-3 py-2 text-center">{r.qty}</td>
                     <td className="px-3 py-2">{r.kondisi}</td>
                     <td className="px-3 py-2 font-mono text-slate-500">{r.batch}</td>
-                    <td className="px-3 py-2 text-slate-400">{r.expDate?.slice(0,10)}</td>
+                    <td className="px-3 py-2 text-slate-400">{r.expDate?.slice(0, 10)}</td>
                     <td className="px-3 py-2 text-slate-500">{r.createdBy}</td>
-                    <td className="px-3 py-2 text-slate-400">{r.createdDate?.slice(0,16)}</td>
+                    <td className="px-3 py-2 text-slate-400">{r.createdDate?.slice(0, 16)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -632,7 +687,6 @@ function UploadTab({
 type SheetSource = { label: string; spreadsheetId: string; tab: string };
 
 function EditTab({ config }: { config: ClaimSheetConfig }) {
-  // Build source options: Master (ALL) + per-expedisi
   const sources: SheetSource[] = useMemo(() => {
     const list: SheetSource[] = [];
     if (config.masterSpreadsheetId) {
@@ -680,7 +734,11 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
     finally { setLoading(false); }
   }, [currentSource, sortDir, search]);
 
-  useEffect(() => { if (currentSource) fetchRows(); }, [sourceIdx, sortDir]); // eslint-disable-line
+  // Auto-fetch when source or sortDir changes
+  useEffect(() => {
+    if (currentSource) fetchRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceIdx, sortDir]);
 
   const startEdit = (idx: number, field: string, val: string) => {
     setSaveError(""); setDelConfirm(null);
@@ -695,7 +753,8 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
     setSaving(true); setSaveError("");
     try {
       const res = await fetch("/api/claim/update-row", {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           spreadsheetId: currentSource.spreadsheetId,
           tab:           currentSource.tab,
@@ -705,9 +764,11 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
-      setRows((prev) => prev.map((r, i) =>
-        i === editCell.idx ? { ...r, [editCell.field]: editValue.trim() } : r
-      ));
+      setRows((prev) =>
+        prev.map((r, i) =>
+          i === editCell.idx ? { ...r, [editCell.field]: editValue.trim() } : r
+        )
+      );
       setEditCell(null);
     } catch (e) { setSaveError(String(e)); }
     finally { setSaving(false); }
@@ -719,7 +780,8 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
     setDeleting(idx); setDelError("");
     try {
       const res = await fetch("/api/claim/delete-row", {
-        method: "DELETE", headers: { "Content-Type": "application/json" },
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           spreadsheetId: currentSource.spreadsheetId,
           tab:           currentSource.tab,
@@ -727,7 +789,9 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
         }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
-      setRows((prev) => prev.filter((_, i) => i !== idx).map((r, i) => ({ ...r, no: String(i + 1) })));
+      setRows((prev) =>
+        prev.filter((_, i) => i !== idx).map((r, i) => ({ ...r, no: String(i + 1) }))
+      );
       setDelConfirm(null);
     } catch (e) { setDelError(String(e)); }
     finally { setDeleting(null); }
@@ -747,6 +811,12 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
       </div>
     );
   }
+
+  const errors = [
+    { msg: error,     clr: () => setError("") },
+    { msg: saveError, clr: () => setSaveError("") },
+    { msg: delError,  clr: () => setDelError("") },
+  ].filter((e) => e.msg);
 
   return (
     <div className="space-y-4">
@@ -773,30 +843,41 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
             {currentSource && (
               <a
                 href={GSHEET_URL(currentSource.spreadsheetId)}
-                target="_blank" rel="noopener noreferrer"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 text-slate-400 hover:text-green-600 hover:border-green-300 flex items-center gap-1"
               >
                 <ExternalLink className="w-3.5 h-3.5" /> Buka G-Sheet
               </a>
             )}
-          </div>
+                   </div>
         </div>
 
-        {/* Search + sort + load */}
+        {/* Search + sort + fetch */}
         <div className="flex flex-wrap gap-3 items-center">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && fetchRows()}
               placeholder="Cari resi, SKU, kondisi..."
-              className="input-field pl-9 w-full" />
+              className="input-field pl-9 w-full"
+            />
             {search && (
-              <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+              >
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
-          <button onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")} className="btn-secondary flex items-center gap-1.5">
+          <button
+            onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")}
+            className="btn-secondary flex items-center gap-1.5"
+          >
             <ArrowUpDown className="w-4 h-4" />
             {sortDir === "desc" ? "Terbaru dulu" : "Terlama dulu"}
           </button>
@@ -804,37 +885,38 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
           <button onClick={fetchRows} disabled={loading} className="btn-primary">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            {loading
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Search className="w-4 h-4" />}
             Tampilkan
           </button>
         </div>
       </div>
 
       {/* Error banners */}
-      {[{ msg: error, clr: () => setError("") }, { msg: saveError, clr: () => setSaveError("") }, { msg: delError, clr: () => setDelError("") }]
-        .filter((e) => e.msg)
-        .map((e, i) => (
-          <div key={i} className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3 text-sm text-red-700">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" /><span className="flex-1">{e.msg}</span>
-            <button onClick={e.clr}><X className="w-4 h-4" /></button>
-          </div>
-        ))}
+      {errors.map((e, i) => (
+        <div key={i} className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-center gap-3 text-sm text-red-700">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1">{e.msg}</span>
+          <button onClick={e.clr}><X className="w-4 h-4" /></button>
+        </div>
+      ))}
 
       {/* Summary chips */}
       {rows.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-slate-700">{rows.length} baris</span>
-          {currentSource?.tab !== "ALL" ? (
-            <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium", expColor(currentSource?.tab ?? ""))}>
-              {currentSource?.tab}
-            </span>
-          ) : (
-            Object.entries(expStats).sort((a, b) => b[1] - a[1]).map(([code, cnt]) => (
+          {currentSource?.tab !== "ALL"
+            ? (
+              <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium", expColor(currentSource?.tab ?? ""))}>
+                {currentSource?.tab}
+              </span>
+            )
+            : Object.entries(expStats).sort((a, b) => b[1] - a[1]).map(([code, cnt]) => (
               <span key={code} className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium", expColor(code))}>
                 {code}: {cnt}
               </span>
-            ))
-          )}
+            ))}
         </div>
       )}
 
@@ -851,9 +933,11 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
               <thead>
                 <tr className="bg-slate-800 text-white">
                   <th className="px-3 py-3 text-center w-10">No.</th>
-                  {currentSource?.tab === "ALL" && <th className="px-3 py-3 text-center w-20">Expedisi</th>}
+                  {currentSource?.tab === "ALL" && (
+                    <th className="px-3 py-3 text-center w-20">Expedisi</th>
+                  )}
                   <th className="px-3 py-3 text-left min-w-[150px]">No. Pesanan/Resi</th>
-                  <th className="px-3 py-3 text-left min-w-[60px]">Barcode</th>
+                  <th className="px-3 py-3 text-left min-w-[80px]">Barcode</th>
                   <th className="px-3 py-3 text-left min-w-[80px]">No. Item</th>
                   <th className="px-3 py-3 text-left min-w-[180px]">SKU</th>
                   <th className="px-3 py-3 text-center w-12">Qty</th>
@@ -862,8 +946,14 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
                   <th className="px-3 py-3 text-center w-24">Exp. Date</th>
                   <th className="px-3 py-3 text-left w-32">Created By</th>
                   <th className="px-3 py-3 text-center w-36">
-                    <button onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")} className="flex items-center gap-1 mx-auto hover:text-green-300">
-                      Created Date {sortDir === "desc" ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+                    <button
+                      onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")}
+                      className="flex items-center gap-1 mx-auto hover:text-green-300"
+                    >
+                      Created Date
+                      {sortDir === "desc"
+                        ? <ChevronDown className="w-3 h-3" />
+                        : <ChevronUp className="w-3 h-3" />}
                     </button>
                   </th>
                   <th className="px-2 py-3 w-16 text-center">Aksi</th>
@@ -871,8 +961,8 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rows.map((row, idx) => {
-                  const isDelConf = delConfirm === idx;
-                  const isDeleting = deleting === idx;
+                  const isDelConf  = delConfirm === idx;
+                  const isDeleting = deleting   === idx;
 
                   const editableFields: { field: keyof SheetRow; mono?: boolean; center?: boolean }[] = [
                     { field: "noResi",      mono: true },
@@ -888,11 +978,16 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
                   ];
 
                   return (
-                    <tr key={`${row.gsheetRow}-${idx}`} className={cn(
-                      "transition-colors",
-                      isDelConf ? "bg-red-50" : idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
-                      "hover:bg-green-50/30"
-                    )}>
+                    <tr
+                      key={`${row.gsheetRow}-${idx}`}
+                      className={cn(
+                        "transition-colors",
+                        isDelConf
+                          ? "bg-red-50"
+                          : idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+                        "hover:bg-green-50/30"
+                      )}
+                    >
                       <td className="px-3 py-2 text-center text-slate-400">{row.no || idx + 1}</td>
 
                       {currentSource?.tab === "ALL" && (
@@ -906,26 +1001,44 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
                       {editableFields.map(({ field, mono, center }) => {
                         const isEditing = editCell?.idx === idx && editCell.field === field;
                         const val = String(row[field] ?? "");
-                        const display = field === "expDate" || field === "createdDate" ? val.slice(0, field === "expDate" ? 10 : 16) : val;
+                        const display =
+                          field === "expDate"     ? val.slice(0, 10) :
+                          field === "createdDate" ? val.slice(0, 16) : val;
 
                         return (
                           <td key={field} className={cn("px-3 py-2", center && "text-center")}>
                             {isEditing ? (
                               <div className="flex items-center gap-1">
-                                <input autoFocus value={editValue}
+                                <input
+                                  autoFocus
+                                  value={editValue}
                                   onChange={(e) => setEditValue(e.target.value)}
-                                  onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }}
-                                  className="border border-green-400 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-400 w-28 font-mono" />
-                                <button onClick={saveEdit} disabled={saving} className="p-1 text-green-600 hover:bg-green-50 rounded">
-                                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") saveEdit();
+                                    if (e.key === "Escape") cancelEdit();
+                                  }}
+                                  className="border border-green-400 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-400 w-28 font-mono"
+                                />
+                                <button
+                                  onClick={saveEdit}
+                                  disabled={saving}
+                                  className="p-1 text-green-600 hover:bg-green-50 rounded"
+                                >
+                                  {saving
+                                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                                    : <Check className="w-3 h-3" />}
                                 </button>
-                                <button onClick={cancelEdit} className="p-1 text-slate-400 hover:bg-slate-100 rounded">
+                                <button
+                                  onClick={cancelEdit}
+                                  className="p-1 text-slate-400 hover:bg-slate-100 rounded"
+                                >
                                   <X className="w-3 h-3" />
                                 </button>
                               </div>
                             ) : (
                               <span
-                                className={cn("cursor-pointer hover:text-green-700",
+                                className={cn(
+                                  "cursor-pointer hover:text-green-700",
                                   mono && "font-mono font-semibold text-slate-800",
                                   !mono && "text-slate-600"
                                 )}
@@ -939,27 +1052,40 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
                         );
                       })}
 
-                      {/* Aksi */}
                       <td className="px-2 py-2 text-center">
                         {isDelConf ? (
                           <div className="flex items-center justify-center gap-0.5">
                             <span className="text-xs text-red-600 mr-0.5">Hapus?</span>
-                            <button onClick={() => handleDelete(idx)} disabled={isDeleting}
-                              className="p-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50">
-                              {isDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            <button
+                              onClick={() => handleDelete(idx)}
+                              disabled={isDeleting}
+                              className="p-1 rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
+                            >
+                              {isDeleting
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                : <Check className="w-3.5 h-3.5" />}
                             </button>
-                            <button onClick={() => setDelConfirm(null)} className="p-1 rounded text-slate-400 hover:bg-slate-100">
+                            <button
+                              onClick={() => setDelConfirm(null)}
+                              className="p-1 rounded text-slate-400 hover:bg-slate-100"
+                            >
                               <X className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         ) : (
                           <div className="flex items-center justify-center gap-0.5">
-                            <button onClick={() => startEdit(idx, "noResi", row.noResi)}
-                              className="p-1.5 rounded text-slate-300 hover:text-green-600 hover:bg-green-50 transition-colors" title="Edit baris">
+                            <button
+                              onClick={() => startEdit(idx, "noResi", row.noResi)}
+                              className="p-1.5 rounded text-slate-300 hover:text-green-600 hover:bg-green-50 transition-colors"
+                              title="Edit baris"
+                            >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
-                            <button onClick={() => { setDelConfirm(idx); setEditCell(null); }}
-                              className="p-1.5 rounded text-slate-300 hover:text-red-600 hover:bg-red-50 transition-colors" title="Hapus dari G-Sheet ini">
+                            <button
+                              onClick={() => { setDelConfirm(idx); setEditCell(null); }}
+                              className="p-1.5 rounded text-slate-300 hover:text-red-600 hover:bg-red-50 transition-colors"
+                              title="Hapus dari sheet ini"
+                            >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
@@ -973,13 +1099,19 @@ function EditTab({ config }: { config: ClaimSheetConfig }) {
           </div>
           <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50 flex justify-between text-xs text-slate-400">
             <span>{rows.length} baris — <strong>{currentSource?.label}</strong></span>
-            <span>Double-click sel untuk edit · 🗑 hapus dari sheet ini saja</span>
+            <span>Double-click sel untuk edit &nbsp;·&nbsp; hapus dari sheet ini saja</span>
           </div>
         </div>
       ) : !loading ? (
         <div className="card p-16 text-center">
           <FileSpreadsheet className="w-12 h-12 mx-auto mb-4 text-slate-200" />
           <p className="font-semibold text-slate-500">Klik Tampilkan untuk muat data</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+</p>
         </div>
       ) : null}
     </div>
