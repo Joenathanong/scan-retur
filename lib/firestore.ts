@@ -38,6 +38,7 @@ export async function getSettings(): Promise<CompanySettings> {
     noteTandaTerima:
       "Seluruh karung yang diserahkan sudah di scan dan disaksikan oleh pihak yang menyerahkan barang. tanda terima ini menjadi bukti yang sah, untuk tanda terima barang dari expedisi ke PT. IEG",
     spreadsheetId: "",
+    claimSpreadsheetId: "",
     updatedAt: null,
     updatedBy: null,
   };

@@ -10,6 +10,7 @@ import {
   History,
   Printer,
   Table2,
+  Package,
   Users,
   Truck,
   Settings,
@@ -34,8 +35,9 @@ const navItems: NavItem[] = [
 ];
 
 const adminItems: NavItem[] = [
-  { href: "/admin/users",    label: "Kelola User",    icon: <Users  className="w-5 h-5" />, adminOnly: true },
-  { href: "/admin/expedisi", label: "Master Expedisi",icon: <Truck  className="w-5 h-5" />, adminOnly: true },
+  { href: "/claim",          label: "Kelola Claim",   icon: <Package  className="w-5 h-5" />, adminOnly: true },
+  { href: "/admin/users",    label: "Kelola User",    icon: <Users    className="w-5 h-5" />, adminOnly: true },
+  { href: "/admin/expedisi", label: "Master Expedisi",icon: <Truck    className="w-5 h-5" />, adminOnly: true },
   { href: "/admin/settings", label: "Pengaturan",     icon: <Settings className="w-5 h-5" />, adminOnly: true },
 ];
 

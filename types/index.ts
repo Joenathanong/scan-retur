@@ -62,6 +62,7 @@ export interface CompanySettings {
   namaPerusahaan: string;
   noteTandaTerima: string;
   spreadsheetId: string;
+  claimSpreadsheetId: string;   // G-Sheet untuk fitur Kelola Claim
   updatedAt: Timestamp | null;
   updatedBy: string | null;
 }
