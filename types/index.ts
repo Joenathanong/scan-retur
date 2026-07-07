@@ -62,9 +62,21 @@ export interface CompanySettings {
   namaPerusahaan: string;
   noteTandaTerima: string;
   spreadsheetId: string;
-  claimSpreadsheetId: string;   // G-Sheet untuk fitur Kelola Claim
   updatedAt: Timestamp | null;
   updatedBy: string | null;
+}
+
+// ─── Claim Sheet Config ────────────────────────────────────────────────────
+
+export interface ClaimExpedisiSheet {
+  spreadsheetId: string;
+  url:           string;
+}
+
+/** Stored in Firestore at settings/claim */
+export interface ClaimSheetConfig {
+  masterSpreadsheetId: string;
+  expedisiSheets:      Record<string, ClaimExpedisiSheet>;
 }
 
 export interface AuditLog {

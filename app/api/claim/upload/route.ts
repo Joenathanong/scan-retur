@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
 import {
   getClaimAuth,
-  getTabList,
   ensureClaimTab,
   readExistingKeys,
   getTabDataCount,
   appendClaimRows,
+  createExpedisiSpreadsheet,
   detectExpedisi,
   dedupKey,
   type ClaimRow,
@@ -15,24 +15,37 @@ import {
 /**
  * POST /api/claim/upload
  *
- * Terima array ClaimRow dari client (hasil parse Excel), cek duplikat di
- * tab ALL, tambahkan baris baru ke ALL + tab expedisi masing-masing.
+ * Terima rows dari client (hasil parse Excel), proses ke:
+ *   1. Master spreadsheet → tab "ALL" (semua data)
+ *   2. Expedisi spreadsheets → masing-masing 1 file terpisah
+ *      - Jika spreadsheet expedisi belum ada → auto-create + share
  *
- * Body:
- *   spreadsheetId — ID Google Sheets untuk claim
- *   rows          — ClaimRow[] (sudah di-parse di client)
+ * Body JSON:
+ *   masterSpreadsheetId  — ID master G-Sheet (semua data)
+ *   expedisiSheets       — { [code]: spreadsheetId } yang sudah ada
+ *   rows                 — array ParsedRow dari client
  *
- * Response:
- *   { added, skipped, expedisiSummary, total }
+ * Response JSON:
+ *   added               — jumlah baris baru
+ *   skipped             — jumlah baris duplikat dilewati
+ *   total               — total baris di Excel
+ *   expedisiSummary     — { [code]: jumlah baris baru }
+ *   newSheets           — { [code]: { spreadsheetId, url } } yang baru dibuat
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { spreadsheetId: bodyId, rows: incoming } = body;
+    const {
+      masterSpreadsheetId,
+      expedisiSheets = {},   // Record<string, string> — code → spreadsheetId
+      rows: incoming = [],
+    } = body;
 
-    const spreadsheetId = bodyId || process.env.CLAIM_SPREADSHEET_ID;
-    if (!spreadsheetId) {
-      return NextResponse.json({ error: "spreadsheetId wajib diisi" }, { status: 400 });
+    if (!masterSpreadsheetId) {
+      return NextResponse.json(
+        { error: "masterSpreadsheetId wajib diisi" },
+        { status: 400 }
+      );
     }
     if (!Array.isArray(incoming) || incoming.length === 0) {
       return NextResponse.json({ error: "rows tidak boleh kosong" }, { status: 400 });
@@ -41,72 +54,86 @@ export async function POST(req: NextRequest) {
     const auth   = getClaimAuth();
     const sheets = google.sheets({ version: "v4", auth });
 
-    // 1. Get all existing tabs once
-    const tabs = await getTabList(sheets, spreadsheetId);
+    // ── 1. Pastikan tab ALL di master sheet ada ──────────────────────────
+    await ensureClaimTab(sheets, masterSpreadsheetId, "ALL");
 
-    // 2. Ensure ALL tab exists
-    await ensureClaimTab(sheets, spreadsheetId, "ALL", tabs);
+    // ── 2. Baca existing keys dari master ALL ────────────────────────────
+    const existingKeys = await readExistingKeys(sheets, masterSpreadsheetId);
 
-    // 3. Read existing dedup keys from ALL tab
-    const existingKeys = await readExistingKeys(sheets, spreadsheetId);
-
-    // 4. Detect expedisi + filter new rows
-    const processed: ClaimRow[] = incoming.map((r: Partial<ClaimRow>) => ({
-      ...r,
-      expedisi: detectExpedisi(r.noResi ?? ""),
-    } as ClaimRow));
+    // ── 3. Detect expedisi + filter duplikat ────────────────────────────
+    const processed: ClaimRow[] = (incoming as Partial<ClaimRow>[]).map((r) => ({
+      noResi:      String(r.noResi      ?? "").trim(),
+      barcode:     String(r.barcode     ?? "").trim(),
+      noItem:      String(r.noItem      ?? "").trim(),
+      sku:         String(r.sku         ?? "").trim(),
+      qty:         String(r.qty         ?? "").trim(),
+      kondisi:     String(r.kondisi     ?? "").trim(),
+      batch:       String(r.batch       ?? "").trim(),
+      expDate:     String(r.expDate     ?? "").trim(),
+      createdBy:   String(r.createdBy   ?? "").trim(),
+      createdDate: String(r.createdDate ?? "").trim(),
+      expedisi:    detectExpedisi(String(r.noResi ?? "")),
+    }));
 
     const newRows: ClaimRow[] = [];
-    const skippedRows: ClaimRow[] = [];
+    let skipped = 0;
 
     for (const row of processed) {
       const key = dedupKey(row.noResi, row.noItem, row.sku, row.barcode);
       if (existingKeys.has(key)) {
-        skippedRows.push(row);
+        skipped++;
       } else {
-        existingKeys.add(key); // prevent within-batch dupes
+        existingKeys.add(key);
         newRows.push(row);
       }
     }
 
     if (newRows.length === 0) {
       return NextResponse.json({
-        added:           0,
-        skipped:         skippedRows.length,
-        expedisiSummary: {},
-        total:           incoming.length,
+        added: 0, skipped, total: incoming.length,
+        expedisiSummary: {}, newSheets: {},
       });
     }
 
-    // 5. Append to ALL tab
-    const allCount = await getTabDataCount(sheets, spreadsheetId, "ALL");
-    await appendClaimRows(sheets, spreadsheetId, "ALL", newRows, allCount + 1);
+    // ── 4. Append ke master ALL ──────────────────────────────────────────
+    const masterCount = await getTabDataCount(sheets, masterSpreadsheetId, "ALL");
+    await appendClaimRows(sheets, masterSpreadsheetId, "ALL", newRows, masterCount + 1);
 
-    // 6. Group new rows by expedisi and append to per-expedisi tabs
+    // ── 5. Group by expedisi ─────────────────────────────────────────────
     const byExpedisi = new Map<string, ClaimRow[]>();
     for (const row of newRows) {
       if (!byExpedisi.has(row.expedisi)) byExpedisi.set(row.expedisi, []);
       byExpedisi.get(row.expedisi)!.push(row);
     }
 
-    const expedisiSummary: Record<string, number> = {};
-    // Refresh tab list after creating ALL
-    const freshTabs = await getTabList(sheets, spreadsheetId);
+    // ── 6. Tulis ke tiap expedisi sheet (create jika belum ada) ──────────
+    const expedisiSummary: Record<string, number>                            = {};
+    const newSheets:       Record<string, { spreadsheetId: string; url: string }> = {};
 
     for (const [expCode, rows] of byExpedisi) {
-      await ensureClaimTab(sheets, spreadsheetId, expCode, freshTabs);
-      const tabCount = await getTabDataCount(sheets, spreadsheetId, expCode);
-      await appendClaimRows(sheets, spreadsheetId, expCode, rows, tabCount + 1);
+      let expSheetId: string = expedisiSheets[expCode] ?? "";
+
+      if (!expSheetId) {
+        // Auto-create spreadsheet baru untuk expedisi ini
+        const created = await createExpedisiSpreadsheet(sheets, expCode);
+        expSheetId = created.spreadsheetId;
+        newSheets[expCode] = created;
+      } else {
+        // Pastikan tab expedisi sudah ada
+        await ensureClaimTab(sheets, expSheetId, expCode);
+      }
+
+      const expCount = await getTabDataCount(sheets, expSheetId, expCode);
+      await appendClaimRows(sheets, expSheetId, expCode, rows, expCount + 1);
       expedisiSummary[expCode] = rows.length;
-      // Add the new tab to freshTabs so next ensureClaimTab call sees it
-      freshTabs.push({ title: expCode, sheetId: -1 });
     }
 
     return NextResponse.json({
-      added:           newRows.length,
-      skipped:         skippedRows.length,
+      added:  newRows.length,
+      skipped,
+      total:  incoming.length,
       expedisiSummary,
-      total:           incoming.length,
+      newSheets, // client akan simpan ke Firestore
     });
   } catch (err) {
     console.error("Claim upload error:", err);

@@ -1,7 +1,11 @@
 /**
- * Shared helpers for Claim G-Sheet operations.
- * All claim data lives in ONE spreadsheet (claimSpreadsheetId),
- * with one tab per expedisi + one "ALL" tab for master data.
+ * Shared helpers untuk Claim G-Sheet.
+ *
+ * Arsitektur:
+ *   - 1 Master Spreadsheet  → tab "ALL", semua data dari semua expedisi
+ *   - N Expedisi Spreadsheets → masing-masing 1 file G-Sheet terpisah,
+ *     1 tab bernama kode expedisi (mis. "JX", "SPXID", "GTL")
+ *   - ID-ID tersimpan di Firestore: settings/claim
  */
 
 import { google } from "googleapis";
@@ -41,21 +45,24 @@ export interface ClaimRow {
   expDate:     string;
   createdBy:   string;
   createdDate: string;
-  expedisi:    string;  // auto-detected from resi prefix
+  expedisi:    string;
 }
 
 export interface ClaimSheetRow extends ClaimRow {
-  gsheetRow: number; // 1-based row in this specific tab
-  no:        string; // sequential No. in this tab (col A)
+  gsheetRow: number;
+  no:        string;
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────
+// ── Auth (dengan Drive scope untuk create & share spreadsheet baru) ────────
 
 export function getClaimAuth() {
   return new google.auth.JWT({
     email: process.env.GOOGLE_SHEETS_CLIENT_EMAIL,
     key:   (process.env.GOOGLE_SHEETS_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    scopes: [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive.file", // create + share files
+    ],
   });
 }
 
@@ -63,29 +70,29 @@ export function getClaimAuth() {
 
 export function detectExpedisi(noResi: string): string {
   const r = String(noResi).toUpperCase().trim();
-  if (r.startsWith("SPXID"))   return "SPXID";
-  if (r.startsWith("TKP"))     return "TKP";
-  if (r.startsWith("GTL"))     return "GTL";
-  if (r.startsWith("JX"))      return "JX";
-  if (r.startsWith("JNE"))     return "JNE";
-  if (r.startsWith("SCP"))     return "SICEPAT";
-  if (r.startsWith("GRAB"))    return "GRAB";
-  if (r.startsWith("IDS"))     return "IDEXPRESS";
-  if (r.startsWith("REX"))     return "REX";
-  if (r.startsWith("SAP"))     return "SAP";
-  if (r.startsWith("NCS"))     return "NCS";
+  if (r.startsWith("SPXID"))  return "SPXID";
+  if (r.startsWith("TKP"))    return "TKP";
+  if (r.startsWith("GTL"))    return "GTL";
+  if (r.startsWith("JX"))     return "JX";
+  if (r.startsWith("JNE"))    return "JNE";
+  if (r.startsWith("SCP"))    return "SICEPAT";
+  if (r.startsWith("GRAB"))   return "GRAB";
+  if (r.startsWith("IDS"))    return "IDEXPRESS";
+  if (r.startsWith("REX"))    return "REX";
+  if (r.startsWith("SAP"))    return "SAP";
+  if (r.startsWith("NCS"))    return "NCS";
   const m = r.match(/^([A-Z]+)/);
   return m ? m[1] : "UNKNOWN";
 }
 
 // ── Dedup key ─────────────────────────────────────────────────────────────
+// 1 resi bisa punya banyak SKU (multi-line) → key = noResi + noItem
+// Jika noItem kosong, fallback ke noResi + SKU + barcode
 
-/** Unique key per line: noResi + noItem (handles multi-SKU per resi correctly). */
 export function dedupKey(noResi: string, noItem: string, sku = "", barcode = ""): string {
   const r = String(noResi).trim();
   const i = String(noItem).trim();
   if (i && i !== "0" && i.toLowerCase() !== "undefined") return `${r}||${i}`;
-  // fallback: use SKU + barcode
   return `${r}||${sku}||${barcode}`;
 }
 
@@ -111,11 +118,11 @@ export async function ensureClaimTab(
   tabName: string,
   existingTabs?: { title: string; sheetId: number }[]
 ): Promise<number> {
-  const tabs = existingTabs ?? await getTabList(sheets, spreadsheetId);
+  const tabs  = existingTabs ?? await getTabList(sheets, spreadsheetId);
   const found = tabs.find((t) => t.title === tabName);
   if (found) return found.sheetId;
 
-  // Create the tab
+  // Create tab
   const res = await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -124,17 +131,17 @@ export async function ensureClaimTab(
       ],
     },
   });
-  const newSheetId = (res.data.replies?.[0]?.addSheet?.properties?.sheetId) ?? 0;
+  const newSheetId = res.data.replies?.[0]?.addSheet?.properties?.sheetId ?? 0;
 
   // Write header
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `'${tabName}'!A1:L1`,
+    range:            `'${tabName}'!A1:L1`,
     valueInputOption: "RAW",
-    requestBody: { values: [CLAIM_HEADER] },
+    requestBody:      { values: [CLAIM_HEADER] },
   });
 
-  // Format header row
+  // Format header
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -145,7 +152,7 @@ export async function ensureClaimTab(
             cell: {
               userEnteredFormat: {
                 backgroundColor: { red: 0.11, green: 0.18, blue: 0.33 },
-                textFormat: { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
+                textFormat:      { bold: true, foregroundColor: { red: 1, green: 1, blue: 1 } },
                 horizontalAlignment: "CENTER",
               },
             },
@@ -159,7 +166,43 @@ export async function ensureClaimTab(
   return newSheetId;
 }
 
-// ── Read existing dedup keys from ALL tab ─────────────────────────────────
+// ── Create new expedisi spreadsheet (auto-generate) ───────────────────────
+
+export async function createExpedisiSpreadsheet(
+  sheets: ReturnType<typeof google.sheets>,
+  expedisiCode: string
+): Promise<{ spreadsheetId: string; url: string }> {
+  // Buat spreadsheet baru
+  const res = await sheets.spreadsheets.create({
+    requestBody: {
+      properties: { title: `Claim Retur - ${expedisiCode}` },
+    },
+  });
+  const spreadsheetId = res.data.spreadsheetId!;
+
+  // Buat tab dengan nama expedisi + header
+  await ensureClaimTab(sheets, spreadsheetId, expedisiCode);
+
+  // Share: anyone with link dapat edit (supaya tim bisa akses)
+  try {
+    const auth  = getClaimAuth();
+    const drive = google.drive({ version: "v3", auth });
+    await drive.permissions.create({
+      fileId:      spreadsheetId,
+      requestBody: { role: "writer", type: "anyone" },
+    });
+  } catch (err) {
+    // Jika sharing gagal, spreadsheet tetap terbuat tapi perlu di-share manual
+    console.warn("Gagal share spreadsheet:", err);
+  }
+
+  return {
+    spreadsheetId,
+    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+  };
+}
+
+// ── Read existing dedup keys dari master ALL tab ──────────────────────────
 
 export async function readExistingKeys(
   sheets: ReturnType<typeof google.sheets>,
@@ -169,7 +212,7 @@ export async function readExistingKeys(
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: "'ALL'!B:D",  // B=noResi, C=barcode, D=noItem
+      range: "'ALL'!B:D", // B=noResi, C=barcode, D=noItem
     });
     const rows = res.data.values || [];
     for (let i = 1; i < rows.length; i++) {
@@ -178,11 +221,11 @@ export async function readExistingKeys(
       const noItem  = String(rows[i]?.[2] ?? "").trim();
       if (noResi) keys.add(dedupKey(noResi, noItem, "", barcode));
     }
-  } catch { /* tab might not exist yet */ }
+  } catch { /* ALL tab belum ada */ }
   return keys;
 }
 
-// ── Get next row number for a tab ─────────────────────────────────────────
+// ── Get row count (data rows) di satu tab ─────────────────────────────────
 
 export async function getTabDataCount(
   sheets: ReturnType<typeof google.sheets>,
@@ -190,7 +233,7 @@ export async function getTabDataCount(
   tabName: string
 ): Promise<number> {
   try {
-    const res = await sheets.spreadsheets.values.get({
+    const res  = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: `'${tabName}'!A:A`,
     });
@@ -225,9 +268,9 @@ export async function appendClaimRows(
   ]);
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range:             `'${tabName}'!A:L`,
-    valueInputOption:  "RAW",
-    insertDataOption:  "INSERT_ROWS",
-    requestBody: { values },
+    range:            `'${tabName}'!A:L`,
+    valueInputOption: "RAW",
+    insertDataOption: "INSERT_ROWS",
+    requestBody:      { values },
   });
 }
