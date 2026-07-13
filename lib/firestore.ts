@@ -165,9 +165,9 @@ export async function updateExpedisi(id: string, data: Partial<Expedisi>) {
   await updateDoc(doc(db, "expedisi", id), data);
 }
 
+/** Hapus permanen expedisi dari Firestore. */
 export async function deleteExpedisi(id: string) {
-  // Soft delete — set active: false
-  await updateDoc(doc(db, "expedisi", id), { active: false });
+  await deleteDoc(doc(db, "expedisi", id));
 }
 
 // ── KARUNG NOMOR EDIT ───────────────────────────────────────────────────────

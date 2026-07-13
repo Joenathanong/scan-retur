@@ -8,6 +8,7 @@ import {
   updateExpedisi,
   deleteExpedisi,
   addAuditLog,
+  getClaimConfig,
 } from "@/lib/firestore";
 import AuthGuard from "@/components/AuthGuard";
 import type { Expedisi } from "@/types";
@@ -36,8 +37,9 @@ export default function AdminExpedisiPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [actionId, setActionId]         = useState<string | null>(null);
-  const [delConfirmId, setDelConfirmId] = useState<string | null>(null);
-  const [deleting, setDeleting]         = useState(false);
+  const [delConfirmId, setDelConfirmId]   = useState<string | null>(null);
+  const [deleting, setDeleting]           = useState(false);
+  const [deleteResult, setDeleteResult]   = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -86,9 +88,47 @@ export default function AdminExpedisiPage() {
   const handleDelete = async (item: Expedisi) => {
     if (!appUser) return;
     setDeleting(true);
+    setError("");
     try {
-      await deleteExpedisi(item.id);
-      await addAuditLog(appUser.uid, appUser.name, "DELETE_EXPEDISI", `Hapus expedisi: ${item.name}`);
+      // 1. Cek apakah expedisi ini punya G-Sheet di claim config
+      const claimCfg = await getClaimConfig();
+      const sheet = claimCfg.expedisiSheets?.[item.code];
+
+      let hasData = false;
+      if (sheet?.spreadsheetId) {
+        // 2. Cek apakah sheet-nya punya data
+        try {
+          const res = await fetch(
+            `/api/claim/read?spreadsheetId=${encodeURIComponent(sheet.spreadsheetId)}&tab=${encodeURIComponent(item.code)}&sortDir=desc&search=`
+          );
+          if (res.ok) {
+            const data = await res.json() as { rows?: unknown[] };
+            hasData = (data.rows?.length ?? 0) > 0;
+          }
+          // Jika API error (tab belum ada, dsb) → anggap tidak ada data
+        } catch { /* anggap tidak ada data */ }
+      }
+
+      if (hasData) {
+        // Ada data di G-Sheet → soft delete (nonaktifkan saja)
+        await updateExpedisi(item.id, { active: false });
+        await addAuditLog(
+          appUser.uid, appUser.name,
+          "DEACTIVATE_EXPEDISI",
+          `Nonaktifkan expedisi: ${item.name} (ada data di G-Sheet, tidak dihapus permanen)`
+        );
+        setDeleteResult(`Expedisi "${item.name}" dinonaktifkan karena masih ada data di Google Sheets.`);
+      } else {
+        // Tidak ada data → hapus permanen
+        await deleteExpedisi(item.id);
+        await addAuditLog(
+          appUser.uid, appUser.name,
+          "DELETE_EXPEDISI",
+          `Hapus permanen expedisi: ${item.name} (tidak ada data di G-Sheet)`
+        );
+        setDeleteResult(`Expedisi "${item.name}" dihapus permanen.`);
+      }
+
       setDelConfirmId(null);
       load();
     } catch (err: unknown) {
@@ -142,6 +182,17 @@ export default function AdminExpedisiPage() {
             placeholder="Cari ekspedisi..."
           />
         </div>
+
+        {/* Notifikasi hasil delete */}
+        {deleteResult && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-center gap-3 text-sm text-blue-800">
+            <Check className="w-4 h-4 flex-shrink-0 text-blue-600" />
+            <span className="flex-1">{deleteResult}</span>
+            <button onClick={() => setDeleteResult("")}>
+              <X className="w-4 h-4 text-blue-400 hover:text-blue-700" />
+            </button>
+          </div>
+        )}
 
         <div className="card overflow-hidden">
           {loading ? (
