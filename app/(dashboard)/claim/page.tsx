@@ -481,6 +481,15 @@ function UploadTab({
       setError("Konfigurasi Master Spreadsheet ID terlebih dahulu.");
       return;
     }
+    // Vercel Hobby limit ~4.5 MB — peringatkan sebelum upload
+    const MB = file.size / 1024 / 1024;
+    if (MB > 4.2) {
+      setError(
+        `File terlalu besar (${MB.toFixed(1)} MB). Vercel membatasi upload ~4 MB. ` +
+        "Coba pecah file menjadi beberapa bagian, atau upgrade ke Vercel Pro."
+      );
+      return;
+    }
     setUploading(true); setError(""); setResult(null);
     try {
       const expedisiSheets: Record<string, string> = {};
@@ -488,18 +497,37 @@ function UploadTab({
         expedisiSheets[code] = sheet.spreadsheetId;
       }
 
-      // Kirim file mentah ke server — server yang parse Excel
       const fd = new FormData();
       fd.append("file",                file);
       fd.append("masterSpreadsheetId", config.masterSpreadsheetId);
       fd.append("expedisiSheets",      JSON.stringify(expedisiSheets));
 
-      const res  = await fetch("/api/claim/upload", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload gagal");
-      setResult(data);
-      if (Object.keys(data.newSheets ?? {}).length > 0) {
-        await onNewSheets(data.newSheets);
+      const res = await fetch("/api/claim/upload", { method: "POST", body: fd });
+
+      // Platform-level errors (413 etc.) bukan JSON — tangani secara eksplisit
+      if (res.status === 413) {
+        throw new Error(
+          `File terlalu besar (${MB.toFixed(1)} MB) — Vercel menolak request. ` +
+          "Pecah file menjadi bagian ≤4 MB, atau upgrade ke Vercel Pro."
+        );
+      }
+
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json() as Record<string, unknown>;
+      } catch {
+        throw new Error(`Server error (HTTP ${res.status}): respons bukan JSON`);
+      }
+
+      if (!res.ok) {
+        const msg = (data.error as string) || "Upload gagal";
+        const detail = data.detail ? ` — ${data.detail}` : "";
+        throw new Error(msg + detail);
+      }
+
+      setResult(data as Parameters<typeof setResult>[0]);
+      if (Object.keys((data.newSheets as Record<string,unknown>) ?? {}).length > 0) {
+        await onNewSheets(data.newSheets as Record<string, { spreadsheetId: string; url: string }>);
       }
     } catch (e) {
       setError(String(e));

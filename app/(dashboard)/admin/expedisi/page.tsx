@@ -35,7 +35,9 @@ export default function AdminExpedisiPage() {
   const [formName, setFormName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [actionId, setActionId] = useState<string | null>(null);
+  const [actionId, setActionId]         = useState<string | null>(null);
+  const [delConfirmId, setDelConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting]         = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -78,6 +80,21 @@ export default function AdminExpedisiPage() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async (item: Expedisi) => {
+    if (!appUser) return;
+    setDeleting(true);
+    try {
+      await deleteExpedisi(item.id);
+      await addAuditLog(appUser.uid, appUser.name, "DELETE_EXPEDISI", `Hapus expedisi: ${item.name}`);
+      setDelConfirmId(null);
+      load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -170,23 +187,63 @@ export default function AdminExpedisiPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 justify-end">
-                          <button onClick={() => openEdit(exp)} className="btn-ghost px-2.5 py-1.5 text-xs">
+                          {/* Edit */}
+                          <button
+                            onClick={() => { openEdit(exp); setDelConfirmId(null); }}
+                            className="btn-ghost px-2.5 py-1.5 text-xs"
+                            title="Edit"
+                          >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Toggle aktif */}
                           {actionId === exp.id ? (
                             <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
                           ) : (
                             <button
-                              onClick={() => handleToggleActive(exp)}
+                              onClick={() => { handleToggleActive(exp); setDelConfirmId(null); }}
                               className={cn(
                                 "btn-ghost px-2.5 py-1.5 text-xs",
-                                exp.active ? "text-red-500 hover:bg-red-50" : "text-green-600 hover:bg-green-50"
+                                exp.active ? "text-orange-500 hover:bg-orange-50" : "text-green-600 hover:bg-green-50"
                               )}
+                              title={exp.active ? "Nonaktifkan" : "Aktifkan"}
                             >
                               {exp.active
                                 ? <><ToggleRight className="w-3.5 h-3.5" /> Nonaktifkan</>
                                 : <><ToggleLeft  className="w-3.5 h-3.5" /> Aktifkan</>
                               }
+                            </button>
+                          )}
+
+                          {/* Delete */}
+                          {delConfirmId === exp.id ? (
+                            <div className="flex items-center gap-1 bg-red-50 border border-red-200 rounded-lg px-2 py-1">
+                              <span className="text-xs text-red-600 font-medium">Hapus?</span>
+                              <button
+                                onClick={() => handleDelete(exp)}
+                                disabled={deleting}
+                                className="p-0.5 text-red-600 hover:bg-red-100 rounded"
+                                title="Ya, hapus"
+                              >
+                                {deleting
+                                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  : <Check className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => setDelConfirmId(null)}
+                                className="p-0.5 text-slate-400 hover:bg-slate-100 rounded"
+                                title="Batal"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setDelConfirmId(exp.id)}
+                              className="btn-ghost px-2.5 py-1.5 text-xs text-red-400 hover:bg-red-50 hover:text-red-600"
+                              title="Hapus permanen"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
