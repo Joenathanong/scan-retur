@@ -182,7 +182,8 @@ function PrintPageInner() {
 
       // 4. Fetch scan rows from G-Sheet
       const date = karung[0].date;
-      const karungNomors = karung.map((k) => k.nomorKarung).join(",");
+      // Gunakan "|" sebagai delimiter agar nomorKarung yang mengandung koma (mis. "Trip 1,2&3") tidak terpotong
+      const karungNomors = karung.map((k) => k.nomorKarung).join("|");
       const url = `/api/gsheet/read?spreadsheetId=${encodeURIComponent(spreadsheetId)}&expedisiCode=${encodeURIComponent(expedisiCode)}&date=${date}&karungNomors=${encodeURIComponent(karungNomors)}`;
 
       const res = await fetch(url);

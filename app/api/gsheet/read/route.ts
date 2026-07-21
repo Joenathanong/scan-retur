@@ -57,7 +57,8 @@ export async function GET(req: NextRequest) {
     // Filter by karung nomors if provided
     let filtered = dataRows;
     if (karungNomorsParam) {
-      const nomors = karungNomorsParam.split(",").map((n) => n.trim());
+      // Delimiter "|" agar nomorKarung yang mengandung koma (mis. "Trip 1,2&3") tidak terpotong
+      const nomors = karungNomorsParam.split("|").map((n) => n.trim());
       filtered = dataRows.filter((r) => nomors.includes(String(r[2] ?? "")));
     }
 
