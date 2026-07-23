@@ -250,7 +250,7 @@ export default function ScanPage() {
         setLastResi(isPotentialPartial ? `⚠️ ${resi} (${resi.length} karakter — cek ulang)` : resi);
         await playSuccess();
 
-        // Sync to Google Sheets in background
+        // Sync ke Google Sheets — background dengan retry otomatis
         if (settings?.spreadsheetId) {
           syncToSheet({
             scanId: saved.id,
@@ -262,6 +262,19 @@ export default function ScanPage() {
             scannedAt: formatTime(now), // format di client (timezone lokal user = WIB)
             date: today,
             spreadsheetId: settings.spreadsheetId,
+          }).then(async (ok) => {
+            if (ok && saved.id) {
+              // Tandai syncedToSheet = true di Firestore
+              try {
+                await updateDoc(doc(db, "scans", saved.id), { syncedToSheet: true });
+              } catch {
+                // Tidak kritikal — data utama sudah di Firestore & G-Sheet
+              }
+            } else if (!ok) {
+              console.warn(`[syncToSheet] Gagal sync resi ${resi} ke G-Sheet setelah 3x percobaan`);
+            }
+          }).catch((err) => {
+            console.error("[syncToSheet] Error tidak terduga:", err);
           });
         }
 

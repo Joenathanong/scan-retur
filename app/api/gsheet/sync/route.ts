@@ -32,71 +32,88 @@ async function ensureSheet(
   );
 
   if (!existing) {
-    // Add new sheet
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            addSheet: {
-              properties: {
-                title: sheetName,
-                gridProperties: { frozenRowCount: 1 },
-              },
-            },
-          },
-        ],
-      },
-    });
-
-    // Write header
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `'${sheetName}'!A1:F1`,
-      valueInputOption: "RAW",
-      requestBody: { values: [HEADER_ROW] },
-    });
-
-    // Format header (bold, background)
-    const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetId = sheetMeta.data.sheets?.find(
-      (s) => s.properties?.title === sheetName
-    )?.properties?.sheetId;
-
-    if (sheetId !== undefined) {
+    // Add new sheet — tangani race condition: request lain mungkin sudah membuat tab
+    // pada saat yang bersamaan (scan cepat berturut-turut)
+    let alreadyCreated = false;
+    try {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId,
         requestBody: {
           requests: [
             {
-              repeatCell: {
-                range: {
-                  sheetId,
-                  startRowIndex: 0,
-                  endRowIndex: 1,
+              addSheet: {
+                properties: {
+                  title: sheetName,
+                  gridProperties: { frozenRowCount: 1 },
                 },
-                cell: {
-                  userEnteredFormat: {
-                    backgroundColor: { red: 0.09, green: 0.64, blue: 0.3 },
-                    textFormat: {
-                      bold: true,
-                      foregroundColor: { red: 1, green: 1, blue: 1 },
-                    },
-                    horizontalAlignment: "CENTER",
-                  },
-                },
-                fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-              },
-            },
-            {
-              updateSheetProperties: {
-                properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
-                fields: "gridProperties.frozenRowCount",
               },
             },
           ],
         },
       });
+    } catch (err) {
+      const msg = String(err);
+      // Google Sheets: "already exists" / "A sheet with that name already exists"
+      if (
+        msg.includes("already exists") ||
+        msg.includes("A sheet with that name")
+      ) {
+        alreadyCreated = true; // concurrent request already created it — proceed
+      } else {
+        throw err; // real error
+      }
+    }
+
+    if (!alreadyCreated) {
+      // Write header — hanya saat kita yang buat tab (bukan concurrent)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${sheetName}'!A1:F1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [HEADER_ROW] },
+      });
+
+      // Format header (bold, background)
+      const sheetMeta = await sheets.spreadsheets.get({ spreadsheetId });
+      const sheetId = sheetMeta.data.sheets?.find(
+        (s) => s.properties?.title === sheetName
+      )?.properties?.sheetId;
+
+      if (sheetId !== undefined) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId,
+          requestBody: {
+            requests: [
+              {
+                repeatCell: {
+                  range: {
+                    sheetId,
+                    startRowIndex: 0,
+                    endRowIndex: 1,
+                  },
+                  cell: {
+                    userEnteredFormat: {
+                      backgroundColor: { red: 0.09, green: 0.64, blue: 0.3 },
+                      textFormat: {
+                        bold: true,
+                        foregroundColor: { red: 1, green: 1, blue: 1 },
+                      },
+                      horizontalAlignment: "CENTER",
+                    },
+                  },
+                  fields: "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                },
+              },
+              {
+                updateSheetProperties: {
+                  properties: { sheetId, gridProperties: { frozenRowCount: 1 } },
+                  fields: "gridProperties.frozenRowCount",
+                },
+              },
+            ],
+          },
+        });
+      }
     }
   }
 }
